@@ -5,12 +5,19 @@ token may reject them; errors propagate without falling back to browser auth.
 """
 
 import json
+import threading
 from uuid import UUID
+from weakref import WeakValueDictionary
 
+from codecks_cli._utils import _get_field
 from codecks_cli.api import query, session_request
 from codecks_cli.card_refs import resolve_card_ids
 from codecks_cli.cards import _get_user_id, get_account
 from codecks_cli.exceptions import CliError
+
+_start_locks = WeakValueDictionary()
+_start_locks_guard = threading.Lock()
+_pending_starts: dict[str, set[str]] = {}
 
 
 def _uuid(value: str, field: str) -> str:
@@ -94,7 +101,7 @@ def get_journey(deck_id: str) -> dict:
     steps = [
         {"id": item_id, **items[item_id]}
         for item_id in (deck.get("workflowItems", deck.get("workflow_items", [])) or [])
-        if item_id in items
+        if item_id in items and items[item_id].get("visibility", "default") == "default"
     ]
     return {
         "deck_id": deck_id,
@@ -157,18 +164,133 @@ def order_journey_steps(
             "[ERROR] Journey label must be a string (up to 200 characters) or null.",
             error_code="INVALID_INPUT",
         )
+    steps = get_journey(deck_id)["steps"]
+    ids = {step["id"] for step in steps}
+    if not set(item_ids) <= ids or (target_id is not None and target_id not in ids):
+        raise CliError(
+            "[ERROR] Steps and target must be active steps in this deck.",
+            error_code="INVALID_INPUT",
+        )
+    action = "addItemsAfter"
+    if target_id is None:
+        # Codecks uses a before-first anchor; addItemsAfter(null) appends.
+        target_id = next(
+            (
+                step["id"]
+                for step in steps
+                if step.get("label") == label and step["id"] not in item_ids
+            ),
+            None,
+        )
+        if target_id is not None:
+            action = "addItemsBefore"
     return _dispatch(
-        "addItemsAfter",
+        action,
         {"deckId": deck_id, "itemIds": item_ids, "targetId": target_id, "label": label},
     )
 
 
 def start_journey(card_id: str) -> dict:
-    """Apply a deck's Journey, creating tasks. Resolve the card reference first."""
-    card_id = resolve_card_ids([card_id])["cards"][0]["id"]
+    """Apply active steps not yet represented by this card's children."""
+    resolved = resolve_card_ids([card_id])["cards"][0]
+    card_id = resolved["id"]
+    if resolved.get("visibility", "default") != "default":
+        raise CliError("[ERROR] Journey parent must be an active card.", error_code="INVALID_INPUT")
+    # ponytail: process-local protection; server idempotency is needed across processes/restarts.
+    with _start_locks_guard:
+        lock = _start_locks.setdefault(card_id, threading.Lock())
+    with lock:
+        return _start_journey_locked(card_id)
+
+
+def _read_journey_parent(card_id: str) -> tuple[str, set[str]]:
+    data = query(
+        {
+            "_root": [
+                {
+                    "account": [
+                        {
+                            f"cards({json.dumps({'cardId': card_id, 'visibility': 'default'})})": [
+                                "deckId",
+                                {"childCards": ["sourceWorkflowItemId"]},
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    )
+    card = data.get("card", {}).get(card_id)
+    if not isinstance(card, dict):
+        raise CliError(
+            "[ERROR] Journey parent is missing or inaccessible.", error_code="INVALID_INPUT"
+        )
+    deck_id = _uuid(_get_field(card, "deck_id", "deckId"), "deck_id")
+    children = _get_field(card, "child_cards", "childCards") or []
+    applied = {
+        _get_field(
+            data.get("card", {}).get(child_id, {}),
+            "source_workflow_item_id",
+            "sourceWorkflowItemId",
+        )
+        for child_id in children
+    }
+    return deck_id, applied
+
+
+def _uncertain_start(card_id: str) -> CliError:
+    return CliError(
+        f"[ERROR] Journey start outcome is uncertain for {card_id}. "
+        "Reconcile its children before retrying. This process will not submit another "
+        "start until all previously submitted steps are visible.",
+        error_code="JOURNEY_OUTCOME_UNKNOWN",
+        retryable=False,
+    )
+
+
+def _start_journey_locked(card_id: str) -> dict:
+    deck_id, applied = _read_journey_parent(card_id)
+    pending = _pending_starts.get(card_id)
+    if pending is not None:
+        if not pending <= applied:
+            raise _uncertain_start(card_id)
+        del _pending_starts[card_id]
+    item_ids = [step["id"] for step in get_journey(deck_id)["steps"] if step["id"] not in applied]
+    if not item_ids:
+        return {
+            "ok": True,
+            "card_id": card_id,
+            "created": 0,
+            "message": "No unapplied Journey steps.",
+        }
     user_id = _uuid(_get_user_id(), "user_id")
     accounts = get_account().get("account", {})
     if len(accounts) != 1:
         raise CliError("[ERROR] Unable to resolve Journey account.", error_code="INVALID_INPUT")
     account_id = _uuid(next(iter(accounts)), "account_id")
-    return _dispatch("apply", {"cardId": card_id, "userId": user_id, "accountId": account_id})
+    _pending_starts[card_id] = set(item_ids)
+    try:
+        result = _dispatch(
+            "apply",
+            {"cardId": card_id, "itemIds": item_ids, "userId": user_id, "accountId": account_id},
+        )
+    except CliError as error:
+        if error.error_code in {
+            "TOKEN_EXPIRED",
+            "PERMISSION_DENIED",
+            "RATE_LIMITED",
+            "INVALID_INPUT",
+        }:
+            del _pending_starts[card_id]
+            raise
+        raise _uncertain_start(card_id) from error
+    except Exception as error:
+        raise _uncertain_start(card_id) from error
+    try:
+        _, applied = _read_journey_parent(card_id)
+    except Exception as error:
+        raise _uncertain_start(card_id) from error
+    if not _pending_starts[card_id] <= applied:
+        raise _uncertain_start(card_id)
+    del _pending_starts[card_id]
+    return result

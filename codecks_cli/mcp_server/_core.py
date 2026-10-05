@@ -1037,6 +1037,8 @@ def _call(method_name: str, **kwargs: Any) -> dict[str, Any]:
             str(e), "setup", retryable=False, error_code=e.error_code or "SETUP_ERROR"
         )
     except CliError as e:
+        if method_name == "start_journey" and e.error_code == "JOURNEY_OUTCOME_UNKNOWN":
+            _write_through_cache(method_name, None, **kwargs)
         error_msg = str(e)
         # Enhance deck/milestone resolution errors with available values
         context = _suggest_valid_values(error_msg)
