@@ -66,18 +66,11 @@ def _resolve_project_id(project_name: str | None = None) -> str:
     if project_name is None:
         return _get_primary_project_id()
 
-    from codecks_cli.cards import list_projects, load_project_names
+    from codecks_cli.cards import list_projects
 
     projects = list_projects()
     for pid, info in projects.items():
         if info.get("name", "").lower() == project_name.lower():
-            return str(pid)
-
-    # Fallback: check .env mapping directly (handles zero-deck projects
-    # that may not appear in list_projects if cache is stale)
-    project_names = load_project_names()
-    for pid, pname in project_names.items():
-        if pname.lower() == project_name.lower():
             return str(pid)
 
     raise CliError(
@@ -293,13 +286,11 @@ def create_project(name: str) -> dict[str, Any]:
         result = api.dispatch("projects/create", payload)
         project_id = result.get("payload", {}).get("id", "")
 
-        # Auto-register in .env and in-memory config
+        # Refresh the API-backed project list after creation.
         if project_id:
-            existing = config.env.get("CODECKS_PROJECTS", "")
-            new_entry = f"{project_id}={name}"
-            updated = f"{existing},{new_entry}" if existing else new_entry
-            config.save_env_value("CODECKS_PROJECTS", updated)
-            config.env["CODECKS_PROJECTS"] = updated
+            config._cache.pop("project_records", None)
+            config._cache.pop("project_names", None)
+            config._cache.pop("decks", None)
 
         return {
             "ok": True,

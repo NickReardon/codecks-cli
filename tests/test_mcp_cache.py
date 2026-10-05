@@ -2,6 +2,7 @@
 
 import json
 import time
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -71,6 +72,7 @@ SAMPLE_STANDUP = {
 def _make_snapshot():
     """Build a valid in-memory snapshot dict."""
     return {
+        "scope": dict(_core._cache_scope),
         "fetched_at": "2026-03-05T10:00:00Z",
         "fetched_ts": time.monotonic(),
         "account": SAMPLE_ACCOUNT,
@@ -99,6 +101,7 @@ def _reset_cache():
 def _inject_cache(snapshot=None):
     """Directly inject a snapshot into the cache for testing."""
     snap = snapshot or _make_snapshot()
+    snap.setdefault("scope", dict(_core._cache_scope))
     _core._snapshot_cache = snap
     _core._cache_loaded_at = snap["fetched_ts"]
     # Rebuild card repository indexes from injected data
@@ -124,11 +127,14 @@ class TestCacheCore:
 
     def test_load_cache_from_disk_valid(self, tmp_path):
         cache_file = tmp_path / "cache.json"
-        cache_file.write_text(json.dumps({"fetched_at": "2026-03-05T10:00:00Z", "account": {}}))
+        fetched_at = datetime.now(UTC).isoformat()
+        cache_file.write_text(
+            json.dumps({"scope": _core._cache_scope, "fetched_at": fetched_at, "account": {}})
+        )
         with patch.object(_core, "CACHE_PATH", str(cache_file)):
             assert _core._load_cache_from_disk() is True
             assert _core._snapshot_cache is not None
-            assert _core._snapshot_cache["fetched_at"] == "2026-03-05T10:00:00Z"
+            assert _core._snapshot_cache["fetched_at"] == fetched_at
 
     def test_load_cache_from_disk_invalid_json(self, tmp_path):
         cache_file = tmp_path / "cache.json"
@@ -145,7 +151,9 @@ class TestCacheCore:
     def test_load_cache_idempotent(self, tmp_path):
         """Second call returns True without re-reading disk (same mtime)."""
         cache_file = tmp_path / "cache.json"
-        cache_file.write_text(json.dumps({"fetched_at": "2026-03-05T10:00:00Z"}))
+        cache_file.write_text(
+            json.dumps({"scope": _core._cache_scope, "fetched_at": datetime.now(UTC).isoformat()})
+        )
         with patch.object(_core, "CACHE_PATH", str(cache_file)):
             _core._load_cache_from_disk()
             # Second call with same file (unchanged mtime) returns True via early-return
@@ -449,9 +457,12 @@ class TestCachedReads:
         from codecks_cli.mcp_server._tools_read import list_cards
 
         _inject_cache()
-        result = list_cards(search="Card A")
-        assert result["cached"] is True
-        assert result["total_count"] == 1
+        with patch(
+            "codecks_cli.mcp_server._tools_read._call", return_value={"cards": [SAMPLE_CARDS[0]]}
+        ) as call:
+            result = list_cards(search="Card A")
+        call.assert_called_once()
+        assert len(result["cards"]) == 1
 
     def test_list_cards_pagination_from_cache(self):
         from codecks_cli.mcp_server._tools_read import list_cards
@@ -523,7 +534,11 @@ class TestCachedReads:
         from codecks_cli.mcp_server._tools_read import get_card
 
         _inject_cache()
-        result = get_card("aaaabbbb-cccc-dddd-eeee-ffffffffffff", include_conversations=False)
+        result = get_card(
+            "aaaabbbb-cccc-dddd-eeee-ffffffffffff",
+            include_conversations=False,
+            include_content=False,
+        )
         assert result["cached"] is True
         assert "Card A" in result["title"]
 
@@ -630,9 +645,9 @@ class TestCacheInvalidation:
         mock.mark_done.return_value = {"ok": True}
         with patch.object(_core, "_get_client", return_value=mock):
             _core._call("mark_done", card_ids=["aaaabbbb-cccc-dddd-eeee-ffffffffffff"])
-        # Write-through: cache updated in place, keys still present
+        # A mutation invalidates cards without refreshing unrelated data.
         assert _core._snapshot_cache is not None
-        assert "cards_result" in _core._snapshot_cache
+        assert "cards_result" not in _core._snapshot_cache
         assert "account" in _core._snapshot_cache
 
     def test_add_to_hand_invalidates_cache(self):
@@ -640,10 +655,10 @@ class TestCacheInvalidation:
         mock.add_to_hand.return_value = {"ok": True}
         with patch.object(_core, "_get_client", return_value=mock):
             _core._call("add_to_hand", card_ids=["aaaabbbb-cccc-dddd-eeee-ffffffffffff"])
-        # Write-through: cache updated in place, keys still present
+        # Hand mutation invalidates the hand and derived views.
         assert _core._snapshot_cache is not None
-        assert "hand" in _core._snapshot_cache
-        assert "pm_focus" in _core._snapshot_cache
+        assert "hand" not in _core._snapshot_cache
+        assert "pm_focus" not in _core._snapshot_cache
         assert "cards_result" in _core._snapshot_cache
 
     def test_read_does_not_invalidate_cache(self):
@@ -867,9 +882,9 @@ class TestFlattenedCardFilters:
         from codecks_cli.mcp_server._tools_read import list_cards
 
         _inject_flat_cache()
-        result = list_cards(milestone="M1")
-        assert result["total_count"] == 1
-        assert _titles(result) == ["Flat A"]
+        with patch("codecks_cli.mcp_server._tools_read._call", return_value={"cards": []}) as call:
+            list_cards(milestone="M1")
+        call.assert_called_once()
 
     def test_project_filter_resolves_via_deck(self):
         """Cards carry no 'project' key — it comes from the deck's project."""

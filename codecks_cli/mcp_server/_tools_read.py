@@ -24,7 +24,10 @@ from codecks_cli.mcp_server._security import _sanitize_activity, _sanitize_card
 
 def _try_cache(key: str) -> dict | list | None:  # type: ignore[type-arg]
     """Return cached data for *key* if cache is valid, else None."""
-    _core._load_cache_from_disk()
+    try:
+        _core._load_cache_from_disk()
+    except (CliError, OSError):
+        return None  # The API path returns the structured authentication error.
     if not _core._is_cache_valid():
         return None
     snapshot = _core._get_snapshot()
@@ -93,8 +96,10 @@ def list_cards(
         Dict with cards (list), stats, total_count, has_more, limit, offset.
     """
     # Try serving from cache for non-archived, unfiltered queries
-    if not archived:
+    if not archived and not (search or milestone or hero or include_stats or sort == "created"):
         cached = _try_cache("cards_result")
+        if hand_only and not isinstance(_try_cache("hand"), list):
+            cached = None
         if cached is not None and isinstance(cached, dict) and "cards" in cached:
             all_cards = cached["cards"]
             # Apply client-side filtering to cached cards
@@ -408,17 +413,13 @@ def get_card(
         return _finalize_tool_result(_contract_error(str(e), "error"))
 
     # Try cache when conversations not needed and not archived (O(1) indexed lookup)
-    if not archived and not include_conversations:
+    if not archived and not include_conversations and not include_content:
+        cached = _try_cache("cards_result")
         repo = _core.get_repository()
-        card = repo.get(card_id)
+        card = repo.get(card_id) if cached is not None else None
         if card is not None:
-            if include_content:
-                # Return full card from cache (no slimming — preserve body text)
-                detail = dict(card)
-            else:
-                # Slim the card for metadata-only checks
-                detail = _slim_card(dict(card))
-                detail.pop("content", None)
+            detail = _slim_card(dict(card))
+            detail.pop("content", None)
             detail.update(_core._get_cache_metadata())
             return _finalize_tool_result(_sanitize_card(detail))
 
@@ -449,7 +450,7 @@ def resolve_card_ids(references: list[str]) -> dict:
 
 def list_decks(include_card_counts: bool = False) -> dict:
     """List all decks. Set include_card_counts=True for per-deck counts (extra API call)."""
-    cached = _try_cache("decks")
+    cached = None if include_card_counts else _try_cache("decks")
     if cached is not None and isinstance(cached, list):
         result = {"decks": [_slim_deck(d) for d in cached]}
         result.update(_core._get_cache_metadata())

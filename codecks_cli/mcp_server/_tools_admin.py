@@ -6,20 +6,25 @@ thread via asyncio.to_thread() since the MCP server runs in an asyncio event loo
 
 import asyncio
 
-from codecks_cli import CliError
+from codecks_cli import CliError, config
 from codecks_cli.mcp_server._core import (
     _contract_error,
+    _ensure_cache_scope,
     _finalize_tool_result,
     _invalidate_cache,
+    _persist_cache_to_disk,
 )
 from codecks_cli.mcp_server._security import _validate_input
 
 
 def _run_admin(func, *args, **kwargs):
     """Call a sync admin function (dispatch API) and return its result."""
+    _ensure_cache_scope()
+    config._cache.clear()
     result = func(*args, **kwargs)
     if result.get("ok"):
         _invalidate_cache()
+        _persist_cache_to_disk()
     return _finalize_tool_result(result)
 
 

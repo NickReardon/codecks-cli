@@ -53,17 +53,29 @@ class TestLoadEnvMapping:
         monkeypatch.setattr(config, "env", {"K": "id1=Name=With=Equals"})
         assert _load_env_mapping("K") == {"id1": "Name=With=Equals"}
 
-    def test_delegates_correctly(self, monkeypatch):
+    @patch("codecks_cli.cards.query")
+    def test_project_names_use_api_not_stale_local_mapping(self, mock_query, monkeypatch):
         monkeypatch.setattr(
             config,
             "env",
             {
-                "CODECKS_PROJECTS": "p1=Tea Shop",
+                "CODECKS_PROJECTS": "p1=Wrong Deck Name",
                 "CODECKS_MILESTONES": "m1=MVP",
             },
         )
+        mock_query.return_value = {"project": {"p1": {"id": "p1", "name": "Tea Shop"}}}
         assert load_project_names() == {"p1": "Tea Shop"}
+        assert load_project_names() == {"p1": "Tea Shop"}
+        mock_query.assert_called_once_with({"_root": [{"account": [{"projects": ["id", "name"]}]}]})
         assert load_milestone_names() == {"m1": "MVP"}
+
+    @patch("codecks_cli.cards.query")
+    def test_project_name_uses_manual_fallback_only_when_api_name_missing(
+        self, mock_query, monkeypatch
+    ):
+        monkeypatch.setattr(config, "env", {"CODECKS_PROJECTS": "p1=Manual Name"})
+        mock_query.return_value = {"project": {"p1": {"id": "p1", "name": ""}}}
+        assert load_project_names() == {"p1": "Manual Name"}
 
 
 class TestGetField:
@@ -493,7 +505,7 @@ class TestEnrichCards:
 
 class TestBuildProjectMap:
     def test_groups_by_project(self, monkeypatch):
-        monkeypatch.setattr(config, "env", {"CODECKS_PROJECTS": "p1=Tea Shop"})
+        config._cache["project_names"] = {"p1": "Tea Shop"}
         decks = {
             "deck": {
                 "dk1": {"id": "d1", "title": "Features", "projectId": "p1"},
@@ -507,7 +519,7 @@ class TestBuildProjectMap:
         assert result["p2"]["name"] == "p2"  # no env name -> falls back to ID
 
     def testget_project_deck_ids_found(self, monkeypatch):
-        monkeypatch.setattr(config, "env", {"CODECKS_PROJECTS": "p1=Tea Shop"})
+        config._cache["project_names"] = {"p1": "Tea Shop"}
         decks = {
             "deck": {
                 "dk1": {"id": "d1", "title": "Features", "projectId": "p1"},
@@ -517,7 +529,7 @@ class TestBuildProjectMap:
         assert ids == {"d1"}
 
     def testget_project_deck_ids_case_insensitive(self, monkeypatch):
-        monkeypatch.setattr(config, "env", {"CODECKS_PROJECTS": "p1=Tea Shop"})
+        config._cache["project_names"] = {"p1": "Tea Shop"}
         decks = {
             "deck": {
                 "dk1": {"id": "d1", "title": "Features", "projectId": "p1"},
@@ -527,7 +539,7 @@ class TestBuildProjectMap:
         assert ids == {"d1"}
 
     def testget_project_deck_ids_not_found(self, monkeypatch):
-        monkeypatch.setattr(config, "env", {"CODECKS_PROJECTS": "p1=Tea Shop"})
+        config._cache["project_names"] = {"p1": "Tea Shop"}
         decks = {
             "deck": {
                 "dk1": {"id": "d1", "title": "Features", "projectId": "p1"},
@@ -584,7 +596,7 @@ class TestResolvers:
 
     def test_resolve_deck_id_with_project_scope(self, monkeypatch):
         """Same-named decks across projects resolve correctly when project is given."""
-        monkeypatch.setattr(config, "env", {"CODECKS_PROJECTS": "p1=Tea Shop,p2=AI Tooling"})
+        config._cache["project_names"] = {"p1": "Tea Shop", "p2": "AI Tooling"}
         config._cache["decks"] = {
             "deck": {
                 "dk1": {"id": "d-tea-backlog", "title": "Backlog", "projectId": "p1"},
@@ -608,7 +620,7 @@ class TestResolvers:
 
     def test_resolve_deck_id_project_not_found(self, monkeypatch):
         """Raises CliError when project name doesn't exist."""
-        monkeypatch.setattr(config, "env", {"CODECKS_PROJECTS": "p1=Tea Shop"})
+        config._cache["project_names"] = {"p1": "Tea Shop"}
         config._cache["decks"] = {
             "deck": {
                 "dk1": {"id": "d-id-1", "title": "Backlog", "projectId": "p1"},
@@ -688,35 +700,30 @@ class TestActiveProjectFiltering:
     def setup_method(self):
         config._cache.clear()
 
-    @patch("codecks_cli.cards._try_call")
-    def test_get_active_project_ids_returns_set(self, mock_try_call):
-        mock_try_call.return_value = {
-            "project": {
-                "pk1": {"id": "active-p1"},
-                "pk2": {"id": "active-p2"},
-            }
-        }
+    @patch("codecks_cli.cards.load_project_names")
+    def test_get_active_project_ids_returns_set(self, mock_names):
+        mock_names.return_value = {"active-p1": "One", "active-p2": "Two"}
         ids = _get_active_project_ids()
         assert ids == {"active-p1", "active-p2"}
 
-    @patch("codecks_cli.cards._try_call")
-    def test_get_active_project_ids_cached(self, mock_try_call):
-        mock_try_call.return_value = {"project": {"pk1": {"id": "active-p1"}}}
+    @patch("codecks_cli.cards.load_project_names")
+    def test_get_active_project_ids_uses_current_operation_names(self, mock_names):
+        mock_names.return_value = {"active-p1": "One"}
         _get_active_project_ids()
         _get_active_project_ids()
-        assert mock_try_call.call_count == 1
+        assert mock_names.call_count == 2
 
-    @patch("codecks_cli.cards._try_call")
-    def test_get_active_project_ids_empty_response(self, mock_try_call):
-        mock_try_call.return_value = {}
+    @patch("codecks_cli.cards.load_project_names")
+    def test_get_active_project_ids_empty_response(self, mock_names):
+        mock_names.return_value = {}
         ids = _get_active_project_ids()
         assert ids == set()
 
-    @patch("codecks_cli.cards._try_call")
-    def test_get_active_project_ids_api_failure(self, mock_try_call):
-        mock_try_call.return_value = None
-        ids = _get_active_project_ids()
-        assert ids == set()
+    @patch("codecks_cli.cards.load_project_names")
+    def test_get_active_project_ids_api_failure(self, mock_names):
+        mock_names.side_effect = CliError("Project query failed")
+        with pytest.raises(CliError, match="Project query failed"):
+            _get_active_project_ids()
 
     @patch("codecks_cli.cards._get_active_project_ids")
     @patch("codecks_cli.cards.query")

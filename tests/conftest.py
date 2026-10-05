@@ -3,6 +3,7 @@ Shared test fixtures for codecks-cli tests.
 Patches config module to avoid loading real .env and making API calls.
 """
 
+import hashlib
 import os
 
 import pytest
@@ -49,6 +50,17 @@ def _isolate_config(monkeypatch, tmp_path):
     # Reset MCP snapshot cache, agent sessions, and prevent disk cache from loading
     from codecks_cli.mcp_server import _core
 
+    monkeypatch.setattr(config, "STORE_DB_PATH", str(tmp_path / "store.db"))
+    _core._reset_store()
+    monkeypatch.setattr(
+        _core,
+        "_cache_scope",
+        {
+            "account_id": "fake-account-id",
+            "credential": hashlib.sha256(b"fake-token").hexdigest(),
+            "account_header": "fake-account",
+        },
+    )
     _core._invalidate_cache()
     _core._reset_sessions()
     monkeypatch.setattr(_core, "CACHE_PATH", _TEST_CACHE_FILE)

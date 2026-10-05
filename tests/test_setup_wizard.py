@@ -7,11 +7,33 @@ from codecks_cli import config, setup_wizard
 
 class TestSetupDiscoverProjects:
     @patch("codecks_cli.setup_wizard.config.save_env_value")
-    @patch("codecks_cli.setup_wizard._try_call")
-    def test_no_projects_saves_empty_mapping(self, mock_try_call, mock_save):
-        mock_try_call.return_value = {"deck": {"d1": {"id": "d1", "title": "Inbox"}}}
+    @patch("codecks_cli.setup_wizard._load_project_records", return_value={})
+    def test_no_projects_does_not_save_mapping(self, _mock_projects, mock_save):
         setup_wizard._setup_discover_projects()
-        mock_save.assert_called_once_with("CODECKS_PROJECTS", "")
+        mock_save.assert_not_called()
+
+    @patch("codecks_cli.setup_wizard.config.save_env_value")
+    @patch("builtins.input")
+    @patch(
+        "codecks_cli.setup_wizard._load_project_records",
+        return_value={"p1": {"id": "p1", "name": "API Name"}},
+    )
+    def test_api_name_never_prompts(self, _mock_projects, mock_input, mock_save):
+        setup_wizard._setup_discover_projects()
+        mock_input.assert_not_called()
+        mock_save.assert_not_called()
+
+    @patch("codecks_cli.setup_wizard.config.save_env_value")
+    @patch("builtins.input", return_value="Manual Name")
+    @patch(
+        "codecks_cli.setup_wizard._load_project_records",
+        return_value={"p1": {"id": "p1", "name": ""}},
+    )
+    def test_missing_api_name_prompts(self, _mock_projects, mock_input, mock_save, monkeypatch):
+        monkeypatch.setattr(config, "env", {})
+        setup_wizard._setup_discover_projects()
+        mock_input.assert_called_once()
+        mock_save.assert_called_once_with("CODECKS_PROJECTS", "p1=Manual Name")
 
 
 class TestSetupDiscoverUser:
@@ -58,6 +80,7 @@ class TestSetupGddOptional:
 
 
 class TestCmdSetupFastPath:
+    @patch("codecks_cli.setup_wizard._setup_default_deck")
     @patch("codecks_cli.setup_wizard._setup_done")
     @patch("codecks_cli.setup_wizard._setup_gdd_optional")
     @patch("codecks_cli.setup_wizard._setup_discover_user")
@@ -76,6 +99,7 @@ class TestCmdSetupFastPath:
         mock_user,
         mock_gdd,
         mock_done,
+        mock_default_deck,
     ):
         mock_load_env.return_value = {
             "CODECKS_ACCOUNT": "acct",

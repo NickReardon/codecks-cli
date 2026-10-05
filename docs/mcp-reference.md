@@ -145,6 +145,11 @@ In-memory + disk cache for fast reads.
 - **Cache-aware tools**: `get_account`, `list_cards`, `get_card`, `list_decks`, `pm_focus`, `standup`, `list_hand`
 - **Selective invalidation**: mutations only clear affected cache keys
 - **Cache warming**: `session_start()` pre-loads with `include_content=False` for smaller payloads
+- **Identity**: snapshots carry the verified account ID and a credential fingerprint. Different credentials or accounts cannot reuse them. Old unscoped snapshots are ignored.
+- **Disk freshness**: restarting preserves the original fetch age. Mutations invalidate affected fields without extending the TTL. SQLite is not a fallback for expired or missing snapshots.
+- **Complete results**: body searches, full card details, milestone/hero filters, created-date sorting and deck counts use the API when the snapshot lacks the required data.
+- **Metadata refresh**: project names and IDs come from the API. Deck/user/project lookup data is reused within an operation and cleared before the next API operation. Configured project names are used only when the API omits a name.
+- **Refresh policy**: refreshes fetch a full snapshot and replace stored membership, removing absent cards and decks. Incremental refresh is deferred until archive, deletion and permission changes can be reconciled reliably.
 - **Stale warnings**: returned when cache age exceeds 80% of TTL
 - **Cross-process coherence**: mtime-based disk checking
 

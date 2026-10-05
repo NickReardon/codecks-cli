@@ -152,9 +152,9 @@ class CardStore:
     # Cards
     # ------------------------------------------------------------------
 
-    def upsert_cards(self, cards: list[dict]) -> None:
+    def upsert_cards(self, cards: list[dict], *, replace: bool = False) -> None:
         """Bulk upsert cards using INSERT OR REPLACE."""
-        if not cards:
+        if not cards and not replace:
             return
         now_iso = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         rows = []
@@ -183,7 +183,9 @@ class CardStore:
                     now_iso,
                 )
             )
-        with self._lock:
+        with self._lock, self._conn:
+            if replace:
+                self._conn.execute("DELETE FROM cards")
             self._conn.executemany(
                 "INSERT OR REPLACE INTO cards "
                 "(id, title, status, priority, effort, deck_name, owner_name, "
@@ -191,11 +193,10 @@ class CardStore:
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 rows,
             )
-            self._conn.commit()
 
-    def upsert_decks(self, decks: list[dict]) -> None:
+    def upsert_decks(self, decks: list[dict], *, replace: bool = False) -> None:
         """Bulk upsert decks using INSERT OR REPLACE."""
-        if not decks:
+        if not decks and not replace:
             return
         rows = []
         for d in decks:
@@ -207,13 +208,14 @@ class CardStore:
                     d.get("project_name") or d.get("project") or "",
                 )
             )
-        with self._lock:
+        with self._lock, self._conn:
+            if replace:
+                self._conn.execute("DELETE FROM decks")
             self._conn.executemany(
                 "INSERT OR REPLACE INTO decks (id, title, project_id, project_name) "
                 "VALUES (?, ?, ?, ?)",
                 rows,
             )
-            self._conn.commit()
 
     def get_card(self, card_id: str) -> dict | None:
         """Single card lookup by ID."""

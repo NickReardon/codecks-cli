@@ -1823,6 +1823,7 @@ class TestTeamDashboard:
 
     def test_dashboard_empty_state(self):
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-03-07T00:00:00Z",
             "cards_result": {"cards": []},
             "pm_focus": {"blocked": [], "stale": []},
@@ -1881,6 +1882,7 @@ class TestGetTeamPlaybook:
 class TestSelectiveCacheInvalidation:
     def test_hand_mutation_preserves_account_and_decks(self):
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "account": {"name": "Test"},
             "decks": [{"id": "d1"}],
             "hand": [{"id": "h1"}],
@@ -1899,6 +1901,7 @@ class TestSelectiveCacheInvalidation:
 
     def test_comment_mutation_preserves_all(self):
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "account": {"name": "Test"},
             "cards_result": {"cards": []},
             "hand": [],
@@ -1916,6 +1919,7 @@ class TestSelectiveCacheInvalidation:
 
     def test_card_mutation_invalidates_cards(self):
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "account": {"name": "Test"},
             "cards_result": {"cards": []},
             "pm_focus": {},
@@ -1932,6 +1936,7 @@ class TestWarmCacheSkip:
         _core._client = mock_client
         # Simulate a valid cache
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-03-07T00:00:00Z",
             "account": {},
             "cards_result": {"cards": []},
@@ -1955,6 +1960,7 @@ class TestWarmCacheSkip:
         mock_client.list_decks.return_value = []
         _core._client = mock_client
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-03-07T00:00:00Z",
             "account": {},
             "cards_result": {"cards": []},
@@ -2189,6 +2195,7 @@ class TestUuidHints:
         short = "abcd1234"
         full_uuid = "abcd1234-5678-9abc-def0-123456789abc"
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {"cards": [{"id": full_uuid, "title": "Test Card"}]},
@@ -2200,6 +2207,7 @@ class TestUuidHints:
     def test_short_id_no_match_no_hint(self):
         """When cache has no matching card, no hint in error."""
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {
@@ -2226,6 +2234,7 @@ class TestUuidHints:
     def test_find_uuid_hint_non_dict_cards(self):
         """_find_uuid_hint handles non-dict cards_result."""
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": "not a dict",
@@ -2236,6 +2245,7 @@ class TestUuidHints:
         """_find_uuid_hint matches when dashes are stripped."""
         full_uuid = "abcd1234-5678-9abc-def0-123456789abc"
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {"cards": [{"id": full_uuid, "title": "Dashed Match"}]},
@@ -2291,6 +2301,7 @@ class TestSessionStart:
     def test_returns_all_sections(self):
         """Response has account, standup, preferences, project_context."""
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "account": {"name": "test", "id": "acc-1"},
@@ -2313,6 +2324,7 @@ class TestSessionStart:
         from codecks_cli.cli import build_parser
 
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "account": {"name": "test"},
@@ -2357,6 +2369,7 @@ class TestSessionStart:
     def test_project_context_has_deck_names(self):
         """project_context includes deck names from cache."""
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "account": {"name": "test"},
@@ -2375,6 +2388,7 @@ class TestSessionStart:
     def test_project_context_has_tag_and_lane_names(self):
         """project_context includes tag and lane names from registries."""
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "account": {},
@@ -2394,6 +2408,7 @@ class TestSessionStart:
     def test_with_agent_name_registers(self):
         """When agent_name is set, agent is registered in sessions."""
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "account": {},
@@ -2410,6 +2425,7 @@ class TestSessionStart:
     def test_prefs_loaded_from_file(self, tmp_path):
         """Preferences are loaded inline from the prefs file."""
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "account": {},
@@ -2435,6 +2451,7 @@ class TestSessionStart:
         def _fake_warm():
             """Simulate warm_cache_impl populating the in-memory cache."""
             _core._snapshot_cache = {
+                "scope": dict(_core._cache_scope),
                 "fetched_at": "now",
                 "fetched_ts": _time.monotonic(),
                 "account": {},
@@ -2466,6 +2483,7 @@ class TestQuickOverview:
     def test_returns_counts(self):
         """Response has by_status, by_priority, effort_stats."""
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {
@@ -2488,6 +2506,7 @@ class TestQuickOverview:
     def test_effort_stats_calculation(self):
         """Effort stats include total, avg, unestimated."""
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {
@@ -2510,6 +2529,7 @@ class TestQuickOverview:
     def test_empty_project(self):
         """Zero cards returns zero counts."""
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {"cards": []},
@@ -2522,6 +2542,7 @@ class TestQuickOverview:
     def test_deck_summary(self):
         """Deck summary groups by deck name."""
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {
@@ -2550,6 +2571,7 @@ class TestEffortFilters:
 
     def test_effort_min(self):
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {
@@ -2566,6 +2588,7 @@ class TestEffortFilters:
 
     def test_effort_max(self):
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {
@@ -2581,6 +2604,7 @@ class TestEffortFilters:
 
     def test_has_effort_true(self):
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {
@@ -2596,6 +2620,7 @@ class TestEffortFilters:
 
     def test_has_effort_false(self):
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {
@@ -2620,6 +2645,7 @@ class TestDocCardGuardrail:
 
     def test_doc_card_status_blocked(self):
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {
@@ -2635,6 +2661,7 @@ class TestDocCardGuardrail:
 
     def test_doc_card_priority_blocked(self):
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {"cards": [{"id": _C1, "cardType": "doc"}]},
@@ -2645,6 +2672,7 @@ class TestDocCardGuardrail:
 
     def test_doc_card_effort_blocked(self):
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {"cards": [{"id": _C1, "cardType": "doc"}]},
@@ -2655,6 +2683,7 @@ class TestDocCardGuardrail:
 
     def test_doc_card_allows_owner(self):
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {"cards": [{"id": _C1, "cardType": "doc"}]},
@@ -2668,6 +2697,7 @@ class TestDocCardGuardrail:
 
     def test_normal_card_allows_status(self):
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {"cards": [{"id": _C1, "cardType": "default"}]},
@@ -2690,6 +2720,7 @@ class TestFindAndUpdate:
 
     def test_phase1_returns_matches(self):
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {
@@ -2707,6 +2738,7 @@ class TestFindAndUpdate:
 
     def test_phase2_updates_cards(self):
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {"cards": []},
@@ -2729,6 +2761,7 @@ class TestFindAndUpdate:
             for i in range(20)
         ]
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {"cards": cards},
@@ -2748,6 +2781,7 @@ class TestFindAndUpdate:
 
     def test_phase1_filters_by_deck(self):
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {
@@ -2764,6 +2798,7 @@ class TestFindAndUpdate:
 
     def test_phase1_filters_by_status(self):
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "fetched_at": "2026-01-01T00:00:00Z",
             "fetched_ts": __import__("time").monotonic(),
             "cards_result": {
@@ -3590,11 +3625,12 @@ class TestSuggestValidValues:
     def test_milestone_not_found_lists_available_milestones(self):
         prior = _core._snapshot_cache
         _core._snapshot_cache = {
+            "scope": dict(_core._cache_scope),
             "milestones": [
                 {"name": "v0.5"},
                 {"name": "v1.0"},
                 "not-a-dict",  # exercises isinstance filter
-            ]
+            ],
         }
         try:
             result = _core._suggest_valid_values("Milestone 'v9' not found")

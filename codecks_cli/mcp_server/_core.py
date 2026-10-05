@@ -1,5 +1,6 @@
 """Core helpers: client caching, _call dispatcher, response contract, UUID validation, snapshot cache."""
 
+import hashlib
 import json
 import os
 import tempfile
@@ -28,6 +29,38 @@ from codecks_cli.store import CardStore
 _state_lock = threading.RLock()
 
 _client: CodecksClient | None = None
+_cache_scope: dict | None = None
+
+
+def _ensure_cache_scope() -> dict:
+    """Verify the account before reusing data for the current credentials."""
+    global _client, _cache_scope
+    from codecks_cli import cards, config
+
+    fingerprint = hashlib.sha256(config.SESSION_TOKEN.encode()).hexdigest()
+    with _state_lock:
+        if (
+            _cache_scope is not None
+            and _cache_scope["credential"] == fingerprint
+            and _cache_scope["account_header"] == config.ACCOUNT
+        ):
+            return dict(_cache_scope)
+        _client = None
+        _cache_scope = None
+        _invalidate_cache()
+        cards._looked_up_user_id = ""
+    account = _get_client().get_account().get("account", {})
+    if len(account) != 1:
+        raise SetupError("Cannot verify the account for cached data.")
+    account_id = next(iter(account))
+    scope = {
+        "account_id": account_id,
+        "credential": fingerprint,
+        "account_header": config.ACCOUNT,
+    }
+    with _state_lock:
+        _cache_scope = scope
+    return dict(scope)
 
 
 def _get_client() -> CodecksClient:
@@ -85,6 +118,7 @@ _snapshot_cache: dict | None = None
 _cache_loaded_at: float = 0.0  # time.monotonic() when loaded/warmed
 _disk_cache_mtime: float = 0.0  # st_mtime of .pm_cache.json when last loaded
 _batch_depth: int = 0  # >0 suppresses disk writes during (possibly overlapping) batches
+_cache_generation: int = 0  # Reject a warm started before a mutation or identity change.
 _repo = CardRepository()
 
 
@@ -101,6 +135,7 @@ def _load_cache_from_disk() -> bool:
     automatically picks up the fresh data on next read.
     """
     global _snapshot_cache, _cache_loaded_at, _disk_cache_mtime
+    scope = _ensure_cache_scope()
     with _state_lock:
         # Check disk file mtime
         try:
@@ -117,12 +152,18 @@ def _load_cache_from_disk() -> bool:
             try:
                 with open(CACHE_PATH, encoding="utf-8") as f:
                     data = json.load(f)
-                if isinstance(data, dict) and "fetched_at" in data:
-                    data["fetched_ts"] = time.monotonic()
+                if isinstance(data, dict) and data.get("scope") == scope:
+                    fetched_at = datetime.fromisoformat(data["fetched_at"])
+                    age = (datetime.now(UTC) - fetched_at).total_seconds()
+                    if age < 0 or CACHE_TTL_SECONDS <= 0 or age >= CACHE_TTL_SECONDS:
+                        _invalidate_cache()
+                        return False
+                    data["fetched_ts"] = time.monotonic() - age
                     _snapshot_cache = data
                     _cache_loaded_at = data["fetched_ts"]
                     _disk_cache_mtime = current_mtime
                     # Rebuild card indexes from loaded data
+                    _repo.clear()
                     cards_data = data.get("cards_result")
                     if isinstance(cards_data, dict):
                         _repo.load(cards_data.get("cards", []))
@@ -130,29 +171,19 @@ def _load_cache_from_disk() -> bool:
                     if isinstance(decks_data, list):
                         _repo.load_decks(decks_data)
                     return True
-            except (json.JSONDecodeError, OSError):
-                pass  # JSON load failed — try SQLite fallback below
-
-        # Fallback: try SQLite store
-        if _snapshot_cache is None:
-            try:
-                store = _get_store()
-                fetched = store.get_meta("fetched_at")
-                if fetched:
-                    if _repo.load_from_store(store):
-                        _snapshot_cache = {"fetched_at": fetched, "fetched_ts": time.monotonic()}
-                        _cache_loaded_at = _snapshot_cache["fetched_ts"]
-                        return True
-            except Exception:
+            except (ValueError, KeyError, TypeError, OSError):
                 pass
+            # A newer invalidation marker or foreign snapshot replaces old data.
+            _invalidate_cache()
 
         return False
 
 
 def _is_cache_valid() -> bool:
     """Return True if in-memory cache exists and hasn't expired."""
+    scope = _ensure_cache_scope()
     with _state_lock:
-        if _snapshot_cache is None:
+        if _snapshot_cache is None or _snapshot_cache.get("scope") != scope:
             return False
         if CACHE_TTL_SECONDS <= 0:
             return False
@@ -188,8 +219,9 @@ def _get_cache_metadata() -> dict:
 
 def _invalidate_cache() -> None:
     """Clear in-memory snapshot cache. Next read will hit the API."""
-    global _snapshot_cache, _cache_loaded_at
+    global _snapshot_cache, _cache_loaded_at, _cache_generation
     with _state_lock:
+        _cache_generation += 1
         _snapshot_cache = None
         _cache_loaded_at = 0.0
         _repo.clear()
@@ -382,6 +414,12 @@ def _warm_cache_impl() -> dict:
     """
     global _snapshot_cache, _cache_loaded_at
 
+    scope = _ensure_cache_scope()
+    with _state_lock:
+        generation = _cache_generation
+    from codecks_cli import config
+
+    config._cache.clear()
     client = _get_client()
     now_ts = time.monotonic()
     now_iso = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -408,6 +446,7 @@ def _warm_cache_impl() -> dict:
     standup_data = _compute_standup(all_cards, hand_ids)
 
     snapshot = {
+        "scope": scope,
         "fetched_at": now_iso,
         "fetched_ts": now_ts,
         "account": account,
@@ -421,6 +460,11 @@ def _warm_cache_impl() -> dict:
     # The API round-trips above ran unlocked; everything below mutates shared
     # state, so it runs under the module lock.
     with _state_lock:
+        if generation != _cache_generation or scope != _cache_scope:
+            raise CliError(
+                "Cache refresh overlapped a mutation or account change; refresh again.",
+                retryable=True,
+            )
         _snapshot_cache = snapshot
         _cache_loaded_at = now_ts
 
@@ -453,8 +497,9 @@ def _warm_cache_impl() -> dict:
             store = _get_store()
             _repo.persist_to_store(store)
             if isinstance(decks, list):
-                store.upsert_decks(decks)
+                store.upsert_decks(decks, replace=True)
             store.set_meta("fetched_at", now_iso)
+            store.set_meta("cache_scope", json.dumps(scope, sort_keys=True))
             store.set_meta("card_count", str(len(all_cards)))
         except Exception:
             pass  # SQLite persistence is best-effort
@@ -634,10 +679,12 @@ def _invalidate_cache_for(method_name: str) -> None:
 
     Falls back to full invalidation for unknown methods.
     """
+    global _cache_generation
     with _state_lock:
         if method_name not in _CACHE_INVALIDATION_MAP:
             _invalidate_cache()
             return
+        _cache_generation += 1
         keys = _CACHE_INVALIDATION_MAP[method_name]
         if not keys or _snapshot_cache is None:
             return
@@ -645,6 +692,7 @@ def _invalidate_cache_for(method_name: str) -> None:
             _snapshot_cache.pop(key, None)
         if "cards_result" in keys:
             _repo.clear()
+            _snapshot_cache.pop("hand", None)  # Hand entries also contain card metadata.
 
 
 # ---------------------------------------------------------------------------
@@ -679,11 +727,14 @@ def _persist_cache_to_disk() -> None:
     """
     global _disk_cache_mtime
     with _state_lock:
-        if _snapshot_cache is None or _batch_depth > 0:
+        if _batch_depth > 0:
             return
         try:
-            disk_data = {k: v for k, v in _snapshot_cache.items() if k != "fetched_ts"}
-            disk_data["fetched_at"] = datetime.now(UTC).isoformat()
+            if _snapshot_cache is None:
+                # An empty marker prevents an older snapshot from being reloaded.
+                disk_data = {}
+            else:
+                disk_data = {k: v for k, v in _snapshot_cache.items() if k != "fetched_ts"}
             cache_dir = os.path.dirname(CACHE_PATH) or "."
             fd, tmp = tempfile.mkstemp(dir=cache_dir, suffix=".tmp")
             try:
@@ -716,100 +767,9 @@ def _recompute_derived() -> None:
 
 
 def _write_through_cache(method_name: str, result, **kwargs) -> None:
-    """Update in-memory cache after a successful mutation.
-
-    Instead of invalidating (deleting cache keys and forcing an API call),
-    we inject the mutation result directly into the cache. This gives
-    same-process reads instant consistency.
-    """
+    """Invalidate affected data; the API supplies authoritative results on the next read."""
     with _state_lock:
-        if _snapshot_cache is None:
-            return
-        if not isinstance(result, dict) or not result.get("ok"):
-            # Mutation failed or result is not a dict — fall back to invalidation
-            _invalidate_cache_for(method_name)
-            return
-
-        cards_result = _snapshot_cache.get("cards_result")
-        if not isinstance(cards_result, dict):
-            _invalidate_cache_for(method_name)
-            return
-        cards: list = cards_result.get("cards", [])
-
-        try:
-            if method_name == "create_card":
-                card_id = result.get("card_id", "")
-                if card_id:
-                    new_card = {
-                        "id": card_id,
-                        "title": result.get("title", kwargs.get("title", "")),
-                        "status": "not_started",
-                        "priority": kwargs.get("priority"),
-                        "effort": kwargs.get("effort"),
-                        "deck_name": result.get("deck", kwargs.get("deck", "")),
-                        "owner_name": result.get("owner", kwargs.get("owner", "")),
-                    }
-                    cards.append(new_card)
-                    _repo.add(new_card)
-                    _recompute_derived()
-
-            elif method_name == "delete_card":
-                card_id = kwargs.get("card_id", "")
-                cards_result["cards"] = [c for c in cards if c.get("id") != card_id]
-                _repo.remove(card_id)
-                # Also remove from hand if present
-                hand = _snapshot_cache.get("hand", [])
-                _snapshot_cache["hand"] = [c for c in hand if c.get("id") != card_id]
-                _recompute_derived()
-
-            elif method_name in ("mark_done", "mark_started"):
-                # mark_done/mark_started take card_ids (plural list), not card_id
-                card_ids = kwargs.get("card_ids", [])
-                new_status = "done" if method_name == "mark_done" else "started"
-                for cid in card_ids:
-                    for card in cards:
-                        if card.get("id") == cid:
-                            card["status"] = new_status
-                            break
-                    _repo.update(cid, {"status": new_status})
-                _recompute_derived()
-
-            elif method_name == "add_to_hand":
-                added_ids = set(kwargs.get("card_ids", []))
-                hand = _snapshot_cache.get("hand", [])
-                existing_ids = {c.get("id") for c in hand}
-                for card in cards:
-                    if card.get("id") in added_ids and card.get("id") not in existing_ids:
-                        hand.append(card)
-                _recompute_derived()
-
-            elif method_name == "remove_from_hand":
-                removed_ids = set(kwargs.get("card_ids", []))
-                _snapshot_cache["hand"] = [
-                    c for c in _snapshot_cache.get("hand", []) if c.get("id") not in removed_ids
-                ]
-                _recompute_derived()
-
-            elif method_name == "archive_card":
-                card_id = kwargs.get("card_id", "")
-                cards_result["cards"] = [c for c in cards if c.get("id") != card_id]
-                _repo.remove(card_id)
-                hand = _snapshot_cache.get("hand", [])
-                _snapshot_cache["hand"] = [c for c in hand if c.get("id") != card_id]
-                _recompute_derived()
-
-            else:
-                # For update_cards, scaffold_feature, split_features, etc.
-                # — fall back to selective invalidation (too complex to write-through)
-                _invalidate_cache_for(method_name)
-                return
-
-        except Exception:
-            # Any error in write-through: fall back to safe invalidation
-            _invalidate_cache_for(method_name)
-            return
-
-        # Persist to disk for cross-process coherence
+        _invalidate_cache_for(method_name)
         _persist_cache_to_disk()
 
 
@@ -1006,7 +966,7 @@ def _validate_uuid_list(values: list[str], field: str = "card_ids") -> list[str]
 def _call(method_name: str, **kwargs: Any) -> dict[str, Any]:
     """Call a CodecksClient method, converting exceptions to error dicts.
 
-    Mutations automatically update the snapshot cache via write-through.
+    Mutations invalidate affected snapshot data and persist that invalidation.
     Undoable mutations (update_cards, mark_done, mark_started) save an undo
     snapshot before executing.
 
@@ -1017,6 +977,10 @@ def _call(method_name: str, **kwargs: Any) -> dict[str, Any]:
         return _contract_error(f"Unknown method: {method_name}", "error")
 
     try:
+        _ensure_cache_scope()
+        from codecks_cli import config
+
+        config._cache.clear()
         client = _get_client()
         # Save undo snapshot before undoable mutations
         if method_name in _UNDOABLE_METHODS:

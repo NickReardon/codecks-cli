@@ -208,7 +208,7 @@ class CardRepository:
         """Write current in-memory data to SQLite store."""
         with self._lock:
             cards = list(self._cards)
-        store.upsert_cards(cards)
+        store.upsert_cards(cards, replace=True)
 
     def load_from_store(self, store: "CardStore") -> bool:
         """Load cards from SQLite store into in-memory indexes.

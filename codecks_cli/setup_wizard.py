@@ -14,7 +14,8 @@ from codecks_cli.api import (
     query,
 )
 from codecks_cli.cards import (
-    _get_active_project_ids,
+    _load_env_mapping,
+    _load_project_records,
     list_cards,
     list_decks,
     load_milestone_names,
@@ -27,55 +28,31 @@ from codecks_cli.cards import (
 
 
 def _setup_discover_projects():
-    """Discover projects from decks and save to .env."""
+    """Show API project names; ask only when a name is missing."""
     print("Discovering projects...")
-    decks_result = _try_call(list_decks)
-    if not decks_result or not decks_result.get("deck"):
-        print("  Could not fetch decks. Skipping project discovery.")
-        return
-
-    project_decks: dict[str, list[str]] = {}
-    for _key, deck in decks_result.get("deck", {}).items():
-        pid = _get_field(deck, "project_id", "projectId")
-        if pid:
-            if pid not in project_decks:
-                project_decks[pid] = []
-            project_decks[pid].append(deck.get("title", ""))
-
-    # Only include active projects (excludes deleted and archived projects)
-    active = _get_active_project_ids()
-    if active:
-        project_decks = {pid: titles for pid, titles in project_decks.items() if pid in active}
-
-    if not project_decks:
+    projects = _try_call(_load_project_records)
+    if not projects:
         print("  No projects found.")
-        config.save_env_value("CODECKS_PROJECTS", "")
         return
-
-    existing_names = load_project_names()
-
-    print(f"  Found {len(project_decks)} project(s):\n")
-    project_pairs = []
-    for pid, deck_titles in project_decks.items():
-        existing_name = existing_names.get(pid)
-        decks_preview = ", ".join(deck_titles[:5])
-        if len(deck_titles) > 5:
-            decks_preview += f" (+{len(deck_titles) - 5} more)"
-        print(f"    Decks: {decks_preview}")
-
-        if existing_name:
-            name_input = input(f"    Project name [{existing_name}]: ").strip()
-            name = name_input if name_input else existing_name
-        else:
-            name = input("    Give this project a name: ").strip()
-            if not name:
-                name = deck_titles[0] if deck_titles else pid[:8]
-                print(f"      Using: {name}")
-        project_pairs.append(f"{pid}={name}")
-        print()
-
-    config.save_env_value("CODECKS_PROJECTS", ",".join(project_pairs))
-    print(f"  Saved {len(project_pairs)} project(s) to .env\n")
+    print(f"  Found {len(projects)} project(s):")
+    manual_names = _load_env_mapping("CODECKS_PROJECTS")
+    changed = False
+    for pid, project in projects.items():
+        name = project.get("name")
+        if not name:
+            prior = manual_names.get(pid, "")
+            entered = input(f"    Project name for {pid} [{prior}]: ").strip()
+            name = entered or prior or pid
+            if entered:
+                manual_names[pid] = entered
+                changed = True
+        print(f"    {name}")
+    if changed:
+        mapping = ",".join(f"{pid}={name}" for pid, name in manual_names.items())
+        config.save_env_value("CODECKS_PROJECTS", mapping)
+        config.env["CODECKS_PROJECTS"] = mapping
+        config._cache.pop("project_names", None)
+    print()
 
 
 def _setup_discover_milestones():
@@ -266,9 +243,7 @@ def _setup_done():
     tok = final_env.get("CODECKS_TOKEN", "")
     print(f"  API token:     {_mask_token(tok) if tok else '(not set)'}")
     print(f"  Default deck:  {'set' if final_env.get('CODECKS_DEFAULT_DECK') else '(not set)'}")
-    proj = final_env.get("CODECKS_PROJECTS", "")
-    proj_count = len([p for p in proj.split(",") if "=" in p]) if proj else 0
-    print(f"  Projects:      {proj_count} mapped")
+    print("  Projects:      read from Codecks API")
     ms = final_env.get("CODECKS_MILESTONES", "")
     ms_count = len([m for m in ms.split(",") if "=" in m]) if ms else 0
     print(f"  Milestones:    {ms_count} mapped")

@@ -38,8 +38,29 @@ def _load_env_mapping(env_key):
     return mapping
 
 
+def _load_project_records():
+    if "project_records" in config._cache:
+        return config._cache["project_records"]
+    result = query({"_root": [{"account": [{"projects": ["id", "name"]}]}]})
+    records = {
+        project["id"]: project
+        for project in result.get("project", {}).values()
+        if project.get("id")
+    }
+    config._cache["project_records"] = records
+    return records
+
+
 def load_project_names():
-    return _load_env_mapping("CODECKS_PROJECTS")
+    if "project_names" in config._cache:
+        return config._cache["project_names"]
+    records = _load_project_records()
+    manual_names = _load_env_mapping("CODECKS_PROJECTS")
+    names = {
+        pid: project.get("name") or manual_names.get(pid) or pid for pid, project in records.items()
+    }
+    config._cache["project_names"] = names
+    return names
 
 
 def load_milestone_names():
@@ -78,19 +99,9 @@ def get_account():
 
 
 def _get_active_project_ids():
-    """Return a set of project IDs that are currently active (cached per invocation).
+    """Return a set of project IDs that are currently active.
     Uses account.projects (active only) as a whitelist — excludes archived and deleted projects."""
-    if "active_project_ids" in config._cache:
-        return config._cache["active_project_ids"]
-    result = _try_call(query, {"_root": [{"account": [{"projects": ["id"]}]}]})
-    ids: set[str] = set()
-    if result:
-        for _key, proj in result.get("project", {}).items():
-            pid = proj.get("id")
-            if pid:
-                ids.add(pid)
-    config._cache["active_project_ids"] = ids
-    return ids
+    return set(load_project_names())
 
 
 def list_decks():
@@ -318,7 +329,7 @@ def get_project_deck_ids(decks_result, project_name):
 
 def _build_project_map(decks_result):
     """Build a map of projectId -> {name, deck_ids} from deck data.
-    Project names come from CODECKS_PROJECTS in .env (API can't query them)."""
+    Project names come from the Codecks account.projects relation."""
     project_names = load_project_names()
     project_decks: dict[str, dict] = {}
     for _key, deck in decks_result.get("deck", {}).items():
@@ -329,12 +340,12 @@ def _build_project_map(decks_result):
             project_decks[pid]["deck_ids"].add(deck.get("id"))
             project_decks[pid]["deck_titles"].append(deck.get("title", ""))
 
-    # Include zero-deck projects from CODECKS_PROJECTS that aren't in decks yet
+    # Include zero-deck projects from the API response.
     for pid, pname in project_names.items():
         if pid not in project_decks:
             project_decks[pid] = {"deck_ids": set(), "deck_titles": [], "name": pname}
 
-    # Apply names from .env mapping, fallback to projectId
+    # Apply names from the API response, fallback to projectId.
     for pid, info in project_decks.items():
         if "name" not in info:
             info["name"] = project_names.get(pid, pid)
