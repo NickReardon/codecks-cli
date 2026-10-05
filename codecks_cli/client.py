@@ -550,17 +550,20 @@ class CodecksClient:
 
         return detail
 
-    def list_decks(self, *, include_card_counts: bool = True) -> list[dict[str, Any]]:
+    def list_decks(
+        self, *, include_card_counts: bool = True, include_metadata: bool = False
+    ) -> list[dict[str, Any]]:
         """List all decks with optional card counts.
 
         Args:
             include_card_counts: If True, fetch all cards to count per deck
                 (extra API call). If False, card_count is None.
+            include_metadata: Read fresh description, deck_type and default_card.
 
         Returns:
             list of deck dicts with id, title, project_name, card_count.
         """
-        decks_result = list_decks()
+        decks_result = list_decks(include_metadata=True) if include_metadata else list_decks()
         deck_counts: dict[str, int] | None = None
         if include_card_counts:
             cards_result = list_cards()
@@ -583,15 +586,30 @@ class CodecksClient:
                     "card_count": deck_counts.get(did, 0) if deck_counts is not None else None,
                 }
             )
+            if include_metadata:
+                template = _get_field(deck, "default_card", "defaultCard")
+                if not isinstance(template, dict):
+                    raise CliError(
+                        "Deck metadata is missing its template object",
+                        error_code="INVALID_QUERY",
+                        retryable=False,
+                    )
+                result[-1].update(
+                    {
+                        "description": deck.get("description", ""),
+                        "deck_type": _get_field(deck, "deck_type", "deckType"),
+                        "default_card": template,
+                    }
+                )
         return result
 
-    def list_projects(self) -> list[dict[str, Any]]:
-        """List all projects.
+    def list_projects(self, *, include_archived: bool = False) -> list[dict[str, Any]]:
+        """List active projects, optionally including archived projects.
 
         Returns:
-            list of project dicts with id, name, deck_count, decks.
+            list of project dicts with id, name, visibility, deck_count, decks.
         """
-        raw = list_projects()
+        raw = list_projects(include_archived=include_archived)
         result = []
         for pid, info in raw.items():
             result.append(
@@ -600,6 +618,7 @@ class CodecksClient:
                     "name": info.get("name", pid),
                     "deck_count": info.get("deck_count", 0),
                     "decks": info.get("decks", []),
+                    "visibility": info.get("visibility", "default"),
                 }
             )
         return result
@@ -1464,6 +1483,12 @@ class CodecksClient:
         if result.get("ok"):
             self._warm_after_admin()
         return result
+
+    def update_deck(self, deck_id: str, *, fields: dict[str, Any]) -> dict[str, Any]:
+        """Update a deck by UUID. defaultCard replaces the entire template."""
+        from codecks_cli import admin
+
+        return admin.update_deck(deck_id, fields)
 
     def create_milestone(self, name: str, target_date: str | None = None) -> dict[str, Any]:
         """Create a release milestone.

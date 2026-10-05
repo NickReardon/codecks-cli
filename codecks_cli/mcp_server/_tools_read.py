@@ -481,8 +481,27 @@ def resolve_card_ids(references: list[str]) -> dict:
     return _finalize_tool_result(result)
 
 
-def list_decks(include_card_counts: bool = False) -> dict:
-    """List all decks. Set include_card_counts=True for per-deck counts (extra API call)."""
+def list_decks(include_card_counts: bool = False, include_metadata: bool = False) -> dict:
+    """List decks; include_metadata reads fresh descriptions, types and templates.
+
+    Template content and tags carry USER_DATA boundaries; remove those wrappers
+    before resubmitting a template to update_deck. Card counts use an extra call.
+    """
+    if include_metadata:
+        result = _call("list_decks", include_card_counts=include_card_counts, include_metadata=True)
+        if isinstance(result, list):
+            result = [
+                {
+                    **deck,
+                    "description": _tag_user_text(deck.get("description")),
+                    "default_card": {
+                        key: _tag_history_diff(value) if key in ("content", "masterTags") else value
+                        for key, value in deck["default_card"].items()
+                    },
+                }
+                for deck in result
+            ]
+        return _finalize_tool_result(result)
     cached = None if include_card_counts else _try_cache("decks")
     if cached is not None and isinstance(cached, list):
         result = {"decks": [_slim_deck(d) for d in cached]}
@@ -491,9 +510,9 @@ def list_decks(include_card_counts: bool = False) -> dict:
     return _finalize_tool_result(_call("list_decks", include_card_counts=include_card_counts))
 
 
-def list_projects() -> dict:
-    """List all projects with deck info."""
-    return _finalize_tool_result(_call("list_projects"))
+def list_projects(include_archived: bool = False) -> dict:
+    """List active projects with deck info; include_archived also returns archived projects."""
+    return _finalize_tool_result(_call("list_projects", include_archived=include_archived))
 
 
 def list_milestones() -> dict:

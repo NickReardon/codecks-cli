@@ -77,7 +77,7 @@ codecks_api.py          <- entry point (thin wrapper)
 codecks_cli/
   cli.py                <- argparse parser, dispatch
   commands.py           <- cmd_*() CLI handlers
-  client.py             <- CodecksClient: 41 public methods
+  client.py             <- CodecksClient: 42 public methods
   attachments.py        <- File validation and S3 multipart upload helpers
   scaffolding.py        <- scaffold_feature(), split_features()
   cards.py              <- Card CRUD, hand, conversations
@@ -108,7 +108,7 @@ codecks_cli/
     _activity.py         format_activity_table, format_activity_diff
     _dashboards.py       format_pm_focus_table, format_standup_table
     _gdd.py              format_gdd_table, format_sync_report
-  mcp_server/           <- 60 MCP tools (package, 7 tool modules)
+  mcp_server/           <- 61 MCP tools (package, 7 tool modules)
     __init__.py          MCPServer init, registration, re-exports
     __main__.py          py -m codecks_cli.mcp_server entry
     _core.py             Client cache, dispatcher, snapshot cache
@@ -119,7 +119,7 @@ codecks_cli/
     _tools_comments.py   5 comment CRUD tools
     _tools_local.py      4 session/preference tools
     _tools_team.py       6 team coordination tools
-    _tools_admin.py      5 admin tools (dispatch API)
+    _tools_admin.py      6 admin tools (dispatch API)
     _tools_journeys.py   5 experimental native Journey tools
   pm_playbook.md        <- Agent-agnostic PM methodology
   py.typed              <- PEP 561 type marker
@@ -327,3 +327,7 @@ git log --oneline -20               # recent commits
 git tag --list -n1                  # version tags
 git diff v0.4.0..HEAD --stat       # changes since last release
 ```
+
+Deck metadata updates use `admin.update_deck` through the Python client and MCP mutation contract. Project listing queries active and optionally archived account relations directly, including zero-deck projects without sharing archived records with active project resolution.
+
+Opt-in deck metadata bypasses both lookup and MCP snapshot caches. Experimental template writes verify `defaultCard` directly through the API before acknowledging success. Failed verification remains non-retryable and invalidates affected MCP views.

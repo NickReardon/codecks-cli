@@ -19,7 +19,9 @@ Discovered endpoints and their field names:
   - cards/update:       {id, ...}  (NOTE: uses 'id', not 'cardId')
 """
 
+import json
 from typing import Any
+from uuid import UUID
 
 from codecks_cli import api, config
 from codecks_cli._utils import _get_field
@@ -300,6 +302,90 @@ def create_project(name: str) -> dict[str, Any]:
         }
     except CliError as e:
         return {"ok": False, "error": str(e)}
+
+
+def update_deck(deck_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+    """Update deck metadata. defaultCard is an experimental whole-template replacement."""
+
+    def invalid(message: str) -> None:
+        raise CliError(message, error_code="INVALID_INPUT", retryable=False)
+
+    def validate_uuid(value: Any, name: str) -> None:
+        try:
+            if not isinstance(value, str) or str(UUID(value)) != value.lower():
+                invalid(f"{name} must be a full UUID")
+        except (ValueError, AttributeError):
+            invalid(f"{name} must be a full UUID")
+
+    validate_uuid(deck_id, "deck_id")
+    allowed = {"title", "description", "deckType", "defaultCard"}
+    if not isinstance(fields, dict) or not fields or fields.keys() - allowed:
+        invalid(
+            "fields must be a nonempty object containing title, description, deckType or defaultCard"
+        )
+    for key, maximum in (("title", 500), ("description", 10000)):
+        if key in fields:
+            value = fields[key]
+            if (
+                not isinstance(value, str)
+                or len(value) > maximum
+                or (key == "title" and not value.strip())
+            ):
+                invalid(
+                    f"{key} must be a string of at most {maximum} characters; title cannot be empty"
+                )
+    if "deckType" in fields and fields["deckType"] not in ("task", "hero", "doc", "mixed"):
+        invalid("deckType must be task, hero, doc or mixed")
+    if "defaultCard" in fields:
+        template = fields["defaultCard"]
+        if not isinstance(template, dict) or template.keys() - {
+            "content",
+            "assigneeId",
+            "priority",
+            "effort",
+            "masterTags",
+        }:
+            invalid("defaultCard contains unsupported fields")
+        if "content" in template and (
+            not isinstance(template["content"], str) or len(template["content"]) > 50000
+        ):
+            invalid("defaultCard.content must be a string of at most 50000 characters")
+        if template.get("priority") not in (None, "a", "b", "c"):
+            invalid("defaultCard.priority must be a, b, c or null")
+        effort = template.get("effort")
+        if effort is not None and (type(effort) is not int or not 0 <= effort <= 2147483647):
+            invalid("defaultCard.effort must be a nonnegative int32 or null")
+        if template.get("assigneeId") is not None:
+            validate_uuid(template["assigneeId"], "defaultCard.assigneeId")
+        if "masterTags" in template:
+            tags = template["masterTags"]
+            if (
+                not isinstance(tags, list)
+                or len(tags) > 100
+                or any(not isinstance(t, str) or not t.strip() or len(t) > 500 for t in tags)
+            ):
+                invalid(
+                    "defaultCard.masterTags must contain at most 100 nonempty strings of at most 500 characters"
+                )
+    try:
+        api.dispatch("decks/update", {"id": deck_id.lower(), **fields})
+        if "defaultCard" in fields:
+            try:
+                data = api.query({f"deck({json.dumps([deck_id.lower()])})": ["defaultCard"]})
+                deck = data.get("deck", {}).get(deck_id.lower(), {})
+                actual = _get_field(deck, "default_card", "defaultCard")
+                if not isinstance(actual, dict) or actual != fields["defaultCard"]:
+                    raise CliError("Template read-back does not match the requested replacement")
+            except (CliError, AttributeError, TypeError) as error:
+                raise CliError(
+                    "Deck update was submitted, but the template could not be verified. "
+                    "Read the deck before retrying.",
+                    error_code="DECK_UPDATE_UNVERIFIED",
+                    retryable=False,
+                ) from error
+    finally:
+        config._cache.pop("decks", None)
+    return {"ok": True, "deck_id": deck_id.lower(), "updated_fields": list(fields), "source": "api"}
 
 
 def archive_deck(deck_name: str, project: str | None = None) -> dict[str, Any]:

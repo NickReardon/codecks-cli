@@ -26,6 +26,22 @@ from codecks_cli.cards import (
 )
 from codecks_cli.exceptions import CliError
 
+
+def test_deck_metadata_bypasses_existing_cache():
+    config._cache["decks"] = {"deck": {"old": {"title": "Cached"}}}
+    with (
+        patch(
+            "codecks_cli.cards.query",
+            return_value={"deck": {"fresh": {"projectId": "p", "defaultCard": {}}}},
+        ) as query,
+        patch("codecks_cli.cards._get_active_project_ids", return_value={"p"}),
+    ):
+        result = cards_mod.list_decks(include_metadata=True)
+    assert "fresh" in result["deck"]
+    assert "defaultCard" in str(query.call_args)
+    assert "old" in config._cache["decks"]["deck"]
+
+
 # ---------------------------------------------------------------------------
 # _load_env_mapping / load_project_names / load_milestone_names
 # ---------------------------------------------------------------------------
@@ -1108,3 +1124,26 @@ class TestOfficialApiHelpers:
         monkeypatch.setattr("codecks_cli.cards.config.DEFAULT_DECK", deck)
         assert default_deck_id() == deck
         mock_resolve.assert_not_called()
+
+
+@pytest.mark.parametrize("include_archived", [False, True])
+def test_list_projects_archived_and_zero_decks(include_archived):
+    data = {
+        "project": {
+            "active": {"name": "Current", "visibility": "default", "decks": ["d1", "d2"]},
+            "empty": {"name": "Empty", "visibility": "default", "decks": []},
+            "archive": {"name": "Old", "visibility": "archived", "decks": []},
+            "deleted": {"visibility": "deleted"},
+        },
+        "deck": {
+            "d1": {"title": "Ideas", "is_deleted": False},
+            "d2": {"title": "Gone", "isDeleted": True},
+        },
+    }
+    with patch("codecks_cli.cards.query", return_value=data) as query:
+        result = cards_mod.list_projects(include_archived=include_archived)
+    assert result["active"]["decks"] == ["Ideas"]
+    assert result["empty"]["deck_count"] == 0
+    assert ("archive" in result) == include_archived
+    assert "deleted" not in result
+    assert ("archivedProjects" in str(query.call_args)) == include_archived

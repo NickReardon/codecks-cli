@@ -137,7 +137,7 @@ from codecks_cli.mcp_server._tools_admin import (
 from codecks_cli.mcp_server._tools_admin import (
     create_milestone as create_milestone_admin,
 )
-from codecks_cli.mcp_server._tools_admin import create_project
+from codecks_cli.mcp_server._tools_admin import create_project, update_deck
 from codecks_cli.mcp_server._tools_admin import (
     create_tag as create_tag_admin,
 )

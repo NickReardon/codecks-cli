@@ -2,8 +2,109 @@
 
 from unittest.mock import patch
 
+import pytest
+
 from codecks_cli import config
-from codecks_cli.admin import create_deck
+from codecks_cli.admin import create_deck, update_deck
+from codecks_cli.exceptions import CliError
+
+
+def test_update_deck_dispatch_and_invalidation():
+    deck_id = "b939bc6f-ab08-11f1-a63e-3b5174846072"
+    fields = {
+        "title": "Renamed",
+        "description": "",
+        "deckType": "task",
+        "defaultCard": {"effort": 0, "assigneeId": None, "masterTags": ["test"]},
+    }
+    config._cache["decks"] = {"old": True}
+    with (
+        patch("codecks_cli.admin.api.dispatch", return_value={}) as dispatch,
+        patch(
+            "codecks_cli.admin.api.query",
+            return_value={"deck": {deck_id: {"default_card": fields["defaultCard"]}}},
+        ),
+    ):
+        assert update_deck(deck_id, fields)["ok"]
+        dispatch.assert_called_once_with("decks/update", {"id": deck_id, **fields})
+    assert "decks" not in config._cache
+    with patch("codecks_cli.admin.api.dispatch", side_effect=CliError("failed")):
+        config._cache["decks"] = {}
+        with pytest.raises(CliError):
+            update_deck(deck_id, {"defaultCard": {}})
+        assert "decks" not in config._cache
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {},
+        {"deck": {}},
+        {"deck": {"00000000-0000-0000-0000-000000000001": {}}},
+        {"deck": {"00000000-0000-0000-0000-000000000001": {"defaultCard": {"content": "old"}}}},
+        CliError("read failed", error_code="NETWORK_ERROR", retryable=True),
+    ],
+)
+def test_update_deck_does_not_acknowledge_unverified_template(response):
+    deck_id = "00000000-0000-0000-0000-000000000001"
+    with (
+        patch("codecks_cli.admin.api.dispatch", return_value={}),
+        patch("codecks_cli.admin.api.query") as query,
+    ):
+        if isinstance(response, Exception):
+            query.side_effect = response
+        else:
+            query.return_value = response
+        config._cache["decks"] = {}
+        with pytest.raises(CliError) as error:
+            update_deck(deck_id, {"defaultCard": {"content": "new"}})
+        assert error.value.error_code == "DECK_UPDATE_UNVERIFIED"
+        assert error.value.retryable is False
+        assert "decks" not in config._cache
+
+
+def test_update_deck_verifies_clear_but_metadata_only_needs_no_read():
+    deck_id = "00000000-0000-0000-0000-000000000001"
+    with (
+        patch("codecks_cli.admin.api.dispatch", return_value={}),
+        patch(
+            "codecks_cli.admin.api.query", return_value={"deck": {deck_id: {"defaultCard": {}}}}
+        ) as query,
+    ):
+        assert update_deck(deck_id, {"defaultCard": {}})["ok"]
+        query.assert_called_once_with(
+            {'deck(["00000000-0000-0000-0000-000000000001"])': ["defaultCard"]}
+        )
+        query.reset_mock()
+        assert update_deck(deck_id, {"title": "new"})["ok"]
+        query.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "deck_id, fields",
+    [
+        ("invalid", {"title": "A"}),
+        ("z" * 36, {"title": "A"}),
+        ("b939bc6f-ab08-11f1-a63e-3b5174846072", {}),
+        ("b939bc6f-ab08-11f1-a63e-3b5174846072", {"id": "other"}),
+        ("b939bc6f-ab08-11f1-a63e-3b5174846072", {"title": " "}),
+        ("b939bc6f-ab08-11f1-a63e-3b5174846072", {"description": None}),
+        ("b939bc6f-ab08-11f1-a63e-3b5174846072", {"deckType": []}),
+        ("b939bc6f-ab08-11f1-a63e-3b5174846072", {"defaultCard": {"effort": True}}),
+        ("b939bc6f-ab08-11f1-a63e-3b5174846072", {"defaultCard": {"priority": "high"}}),
+        ("b939bc6f-ab08-11f1-a63e-3b5174846072", {"defaultCard": {"assigneeId": "bad"}}),
+        ("b939bc6f-ab08-11f1-a63e-3b5174846072", {"defaultCard": {"content": None}}),
+        ("b939bc6f-ab08-11f1-a63e-3b5174846072", {"defaultCard": {"masterTags": [None]}}),
+        ("b939bc6f-ab08-11f1-a63e-3b5174846072", {"defaultCard": {"status": "done"}}),
+    ],
+)
+def test_update_deck_rejects_invalid_fields_before_dispatch(deck_id, fields):
+    with patch("codecks_cli.admin.api.dispatch") as dispatch:
+        with pytest.raises(CliError) as error:
+            update_deck(deck_id, fields)
+        assert error.value.error_code == "INVALID_INPUT"
+        dispatch.assert_not_called()
+
 
 _PID = "project-1"
 

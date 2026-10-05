@@ -650,6 +650,7 @@ _load_claims()
 # ---------------------------------------------------------------------------
 
 _CACHE_INVALIDATION_MAP: dict[str, list[str]] = {
+    "update_deck": ["cards_result", "decks", "pm_focus", "standup"],
     "add_to_hand": ["hand", "pm_focus", "standup"],
     "remove_from_hand": ["hand", "pm_focus", "standup"],
     "attach_files": ["cards_result", "pm_focus", "standup"],
@@ -865,6 +866,7 @@ def _finalize_tool_result(result: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 _ALLOWED_METHODS = {
+    "update_deck",
     "get_journey",
     "create_journey_step",
     "update_journey_step",
@@ -903,6 +905,7 @@ _ALLOWED_METHODS = {
 }
 
 _MUTATION_METHODS = {
+    "update_deck",
     "create_journey_step",
     "update_journey_step",
     "order_journey_steps",

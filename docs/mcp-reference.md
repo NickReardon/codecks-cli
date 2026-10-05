@@ -1,6 +1,6 @@
 # MCP Server Reference
 
-The MCP (Model Context Protocol) server exposes 60 tools for AI agents, enabling full Codecks management from within an AI conversation.
+The MCP (Model Context Protocol) server exposes 61 tools for AI agents, enabling full Codecks management from within an AI conversation.
 
 ## Setup
 
@@ -107,7 +107,7 @@ Use prompts when your MCP client supports them. Use the CLI directly when you wa
 
 This also warms the snapshot cache, making subsequent reads near-instant (<50ms).
 
-## Tool Inventory (60 tools)
+## Tool Inventory (61 tools)
 
 | Category | Count | Tools |
 |----------|-------|-------|
@@ -119,7 +119,7 @@ This also warms the snapshot cache, making subsequent reads near-instant (<50ms)
 | **Comments** | 5 | `create_comment`, `reply_comment`, `close_comment`, `reopen_comment`, `list_conversations` |
 | **Session** | 4 | `session_start`, `get_workflow_preferences`, `save_workflow_preferences`, `clear_workflow_preferences` |
 | **Team** | 6 | `claim_card`, `release_card`, `delegate_card`, `team_status`, `team_dashboard`, `partition_cards` |
-| **Admin** | 5 | `create_project`, `create_deck`, `create_milestone`, `create_tag`, `archive_deck` |
+| **Admin** | 6 | `create_project`, `create_deck`, `update_deck`, `create_milestone`, `create_tag`, `archive_deck` |
 | **Other** | 1 | `undo` |
 
 Notes on individual tools:
@@ -264,3 +264,17 @@ Built-in safety checks that prevent common agent mistakes:
 - **Default deck**: `create_card` / `batch_create_cards` without `deck` use `CODECKS_DEFAULT_DECK`; if it is unset they fail with a hint instead of creating a private, deck-less card
 - **Rate limiting**: every Codecks HTTP request (not every tool call) takes a slot in a per-process 35-per-5-seconds window, below Codecks' documented 40 requests / 5 s per IP; a 429 is retried after its `retry-after` wait (up to `CODECKS_HTTP_MAX_RETRIES`, default 2), then returned as `RATE_LIMITED`
 - **Prompt injection detection**: sanitizes user content fields
+
+## Deck updates and archived projects
+
+`list_projects(include_archived=True)` includes archived projects and returns `visibility`, API names, and undeleted deck counts. The default includes active projects only, including projects with no decks.
+
+`update_deck(deck_id, fields)` requires a full UUID. Supported fields: `title`, `description`, `deckType` (`task`, `hero`, `doc`, `mixed`), and `defaultCard`. Omitted fields remain unchanged. Switching to hero resets started cards to not_started. Hero/doc changes fail while Journey steps target the deck.
+
+`defaultCard` replaces the entire template; `{}` clears it. Supported template fields: `content`, `assigneeId` (UUID or null), `priority` (a/b/c or null), `effort` (nonnegative int32 or null), and `masterTags` (tag names). Template writes are experimental: verified against the live API, but undocumented by Codecks. API card creation does not apply template defaults.
+
+### Safe template editing
+
+Read `list_decks(include_metadata=True)` before changing a template. This bypasses the snapshot and returns `description`, `deck_type`, and `default_card`. MCP bounds template content and tag names with `[USER_DATA]` markers; remove the boundary markers before sending those values back. The Python client returns the original values. Metadata is opt-in so normal deck reads stay small.
+
+Template writes perform a direct API read-back before reporting success. A missing template, mismatched replacement, or failed read returns `DECK_UPDATE_UNVERIFIED` with `retryable=false`. Other fields in the same update may already have changed. Inspect current metadata before retrying. Non-template edits do not require this extra read.

@@ -1,4 +1,4 @@
-"""Admin tools: project, deck, milestone, tag creation and deck deletion (5 tools).
+"""Admin tools: project, deck, milestone, tag creation and deck editing (6 tools).
 
 Uses direct Codecks dispatch API endpoints. All calls are offloaded to a worker
 thread via asyncio.to_thread() since the MCP server runs in an asyncio event loop.
@@ -8,6 +8,7 @@ import asyncio
 
 from codecks_cli import CliError, config
 from codecks_cli.mcp_server._core import (
+    _call,
     _contract_error,
     _ensure_cache_scope,
     _finalize_tool_result,
@@ -174,6 +175,24 @@ async def archive_deck(deck: str) -> dict:
     return await asyncio.to_thread(_run_admin, admin.archive_deck, deck)
 
 
+async def update_deck(deck_id: str, fields: dict) -> dict:
+    """Edit title, description, deckType or defaultCard by full deck UUID.
+
+    deckType: task, hero, doc, mixed. Switching to hero resets started cards.
+    Hero/doc changes fail if Journey steps target this deck. defaultCard replaces
+    the entire template; {} clears it. This template write is undocumented by
+    Codecks, and API card creation does not apply template defaults. Read current
+    values with list_decks(include_metadata=True). Template writes require a
+    matching read-back; DECK_UPDATE_UNVERIFIED means inspect state before retrying.
+    """
+    result = await asyncio.to_thread(_call, "update_deck", deck_id=deck_id, fields=fields)
+    if result.get("ok") is False and result.get("error_code") != "INVALID_INPUT":
+        # A failed response can follow a completed write; do not reuse stale data.
+        _invalidate_cache()
+        _persist_cache_to_disk()
+    return _finalize_tool_result(result)
+
+
 def register(mcp):
     """Register all admin tools with the MCPServer instance."""
     mcp.tool()(create_project)
@@ -181,3 +200,4 @@ def register(mcp):
     mcp.tool()(create_milestone)
     mcp.tool()(create_tag)
     mcp.tool()(archive_deck)
+    mcp.tool()(update_deck)

@@ -25,6 +25,41 @@ def _client():
     return CodecksClient(validate_token=False)
 
 
+@pytest.mark.parametrize("key", ["defaultCard", "default_card"])
+def test_list_decks_exposes_fresh_template_metadata(key):
+    template = {"content": "Keep", "effort": 3, "priority": None}
+    with (
+        patch(
+            "codecks_cli.client.list_decks",
+            return_value={
+                "deck": {
+                    "d": {
+                        "projectId": "p",
+                        "description": "Details",
+                        "deckType": "task",
+                        key: template,
+                    }
+                }
+            },
+        ) as decks,
+        patch("codecks_cli.client.load_project_names", return_value={"p": "Project"}),
+    ):
+        result = _client().list_decks(include_card_counts=False, include_metadata=True)
+    decks.assert_called_once_with(include_metadata=True)
+    assert result[0]["default_card"] == template
+    assert result[0]["description"] == "Details" and result[0]["deck_type"] == "task"
+
+
+def test_list_decks_does_not_invent_missing_template():
+    with (
+        patch("codecks_cli.client.list_decks", return_value={"deck": {"d": {}}}),
+        patch("codecks_cli.client.load_project_names", return_value={}),
+    ):
+        with pytest.raises(CliError) as error:
+            _client().list_decks(include_card_counts=False, include_metadata=True)
+    assert error.value.error_code == "INVALID_QUERY"
+
+
 def test_card_history_uses_live_ordered_pages_and_preserves_encoded_diffs():
     card_id = "00000000-0000-0000-0000-000000000001"
     relation = f"diffs({json.dumps({'$order': '-version', '$limit': 2, '$offset': 1})})"

@@ -104,10 +104,13 @@ def _get_active_project_ids():
     return set(load_project_names())
 
 
-def list_decks():
-    if "decks" in config._cache:
+def list_decks(*, include_metadata=False):
+    if not include_metadata and "decks" in config._cache:
         return config._cache["decks"]
-    q = {"_root": [{"account": [{"decks": ["title", "id", "projectId", "isDeleted"]}]}]}
+    fields = ["title", "id", "projectId", "isDeleted"]
+    if include_metadata:
+        fields += ["description", "deckType", "defaultCard"]
+    q = {"_root": [{"account": [{"decks": fields}]}]}
     result = query(q)
 
     # Whitelist: only keep decks from active projects (excludes archived and deleted projects).
@@ -116,11 +119,12 @@ def list_decks():
     result["deck"] = {
         k: v
         for k, v in result.get("deck", {}).items()
-        if not v.get("isDeleted")
+        if not _get_field(v, "is_deleted", "isDeleted")
         and (not active_pids or _get_field(v, "project_id", "projectId") in active_pids)
     }
 
-    config._cache["decks"] = result
+    if not include_metadata:
+        config._cache["decks"] = result
     return result
 
 
@@ -501,16 +505,30 @@ def list_activity(limit=20):
     return result
 
 
-def list_projects():
-    """List projects by querying decks and grouping by projectId."""
-    decks_result = list_decks()
-    projects = _build_project_map(decks_result)
+def list_projects(*, include_archived=False):
+    """List API projects, optionally including archived projects."""
+    if type(include_archived) is not bool:
+        raise CliError("include_archived must be a boolean", error_code="INVALID_INPUT")
+    fields = ["id", "name", "visibility", {"decks": ["title", "isDeleted"]}]
+    relations = [{"projects": fields}]
+    if include_archived:
+        relations.append({"archivedProjects": fields})
+    data = query({"_root": [{"account": relations}]})
+    names = _load_env_mapping("CODECKS_PROJECTS")
     output = {}
-    for pid, info in projects.items():
+    for pid, info in data.get("project", {}).items():
+        visibility = info.get("visibility", "default")
+        if visibility == "deleted" or (visibility == "archived" and not include_archived):
+            continue
+        decks = [data.get("deck", {}).get(did, {}) for did in info.get("decks", [])]
+        titles = [
+            d.get("title", "") for d in decks if d and not _get_field(d, "is_deleted", "isDeleted")
+        ]
         output[pid] = {
-            "name": info.get("name", pid),
-            "deck_count": len(info["deck_ids"]),
-            "decks": info["deck_titles"],
+            "name": info.get("name") or names.get(pid) or pid,
+            "visibility": visibility,
+            "deck_count": len(titles),
+            "decks": titles,
         }
     return output
 
