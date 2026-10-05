@@ -1,6 +1,6 @@
 # MCP Server Reference
 
-The MCP (Model Context Protocol) server exposes 61 tools for AI agents, enabling full Codecks management from within an AI conversation.
+The MCP (Model Context Protocol) server exposes 62 tools for AI agents, enabling full Codecks management from within an AI conversation.
 
 ## Setup
 
@@ -107,7 +107,7 @@ Use prompts when your MCP client supports them. Use the CLI directly when you wa
 
 This also warms the snapshot cache, making subsequent reads near-instant (<50ms).
 
-## Tool Inventory (61 tools)
+## Tool Inventory (62 tools)
 
 | Category | Count | Tools |
 |----------|-------|-------|
@@ -119,7 +119,7 @@ This also warms the snapshot cache, making subsequent reads near-instant (<50ms)
 | **Comments** | 5 | `create_comment`, `reply_comment`, `close_comment`, `reopen_comment`, `list_conversations` |
 | **Session** | 4 | `session_start`, `get_workflow_preferences`, `save_workflow_preferences`, `clear_workflow_preferences` |
 | **Team** | 6 | `claim_card`, `release_card`, `delegate_card`, `team_status`, `team_dashboard`, `partition_cards` |
-| **Admin** | 6 | `create_project`, `create_deck`, `update_deck`, `create_milestone`, `create_tag`, `archive_deck` |
+| **Admin** | 7 | `create_project`, `create_deck`, `update_deck`, `create_milestone`, `update_milestone`, `create_tag`, `archive_deck` |
 | **Other** | 1 | `undo` |
 
 Notes on individual tools:
@@ -278,3 +278,11 @@ Built-in safety checks that prevent common agent mistakes:
 Read `list_decks(include_metadata=True)` before changing a template. This bypasses the snapshot and returns `description`, `deck_type`, and `default_card`. MCP bounds template content and tag names with `[USER_DATA]` markers; remove the boundary markers before sending those values back. The Python client returns the original values. Metadata is opt-in so normal deck reads stay small.
 
 Template writes perform a direct API read-back before reporting success. A missing template, mismatched replacement, or failed read returns `DECK_UPDATE_UNVERIFIED` with `retryable=false`. Other fields in the same update may already have changed. Inspect current metadata before retrying. Non-template edits do not require this extra read.
+
+## Milestone metadata editing
+
+`update_milestone(milestone_id, fields)` accepts a full UUID and a nonempty object of `name`, `description`, `color`, `date`, and `startDate`. Omitted fields are unchanged. `description=""` clears text; `startDate=null` clears the start date. Dates must be real calendar dates in exact `YYYY-MM-DD` format. Colors: gray, brown, yellow, red, pink, blue, green. Project reassignment, Hand syncing and capacities are outside this tool.
+
+Every submitted field is read back before success. `MILESTONE_UPDATE_UNVERIFIED` means the write was submitted but persistence could not be confirmed; `retryable=false`. Inspect `list_milestones(include_metadata=True)` before retrying. Metadata includes `description`, `color`, `date`, and nullable `start_date`; MCP wraps names and descriptions with USER_DATA boundaries. Remove boundary markers before resubmitting text.
+
+API records own milestone IDs and names, including name resolution and card enrichment. Local milestone names are used only when an existing API record has no name. Empty results do not resurrect local entries, and API failures propagate. Basic milestone records share a per-operation lookup cache; metadata reads bypass it. Mutations invalidate affected card, deck, milestone and dashboard views.

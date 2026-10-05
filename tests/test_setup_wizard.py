@@ -3,6 +3,45 @@
 from unittest.mock import patch
 
 from codecks_cli import config, setup_wizard
+from codecks_cli.exceptions import CliError
+
+
+def test_milestone_discovery_only_prompts_for_missing_api_names(monkeypatch):
+    monkeypatch.setitem(config.env, "CODECKS_MILESTONES", "m1=Old,m2=Prior,other=Keep")
+    records = {"m1": {"name": "API Name"}, "m2": {"name": ""}}
+    with (
+        patch("codecks_cli.setup_wizard._load_milestone_records", return_value=records),
+        patch("builtins.input", return_value="Fallback") as prompt,
+        patch.object(config, "save_env_value") as save,
+    ):
+        setup_wizard._setup_discover_milestones()
+    prompt.assert_called_once_with("    Milestone name for m2 [Prior]: ")
+    save.assert_called_once_with("CODECKS_MILESTONES", "m1=Old,m2=Fallback,other=Keep")
+    assert setup_wizard._load_env_mapping("CODECKS_MILESTONES")["m2"] == "Fallback"
+
+
+def test_named_milestones_do_not_prompt_or_save():
+    with (
+        patch(
+            "codecks_cli.setup_wizard._load_milestone_records", return_value={"m": {"name": "API"}}
+        ),
+        patch("builtins.input") as prompt,
+        patch.object(config, "save_env_value") as save,
+    ):
+        setup_wizard._setup_discover_milestones()
+    prompt.assert_not_called()
+    save.assert_not_called()
+
+
+def test_milestone_discovery_failure_preserves_mapping():
+    with (
+        patch("codecks_cli.setup_wizard._load_milestone_records", side_effect=CliError("denied")),
+        patch("builtins.input") as prompt,
+        patch.object(config, "save_env_value") as save,
+    ):
+        setup_wizard._setup_discover_milestones()
+    prompt.assert_not_called()
+    save.assert_not_called()
 
 
 class TestSetupDiscoverProjects:

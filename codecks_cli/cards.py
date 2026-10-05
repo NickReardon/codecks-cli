@@ -63,8 +63,34 @@ def load_project_names():
     return names
 
 
+def _load_milestone_records(*, include_metadata=False):
+    """API records own milestone identity; metadata reads always bypass the cache."""
+    if not include_metadata and "milestone_records" in config._cache:
+        return config._cache["milestone_records"]
+    fields = ["id", "name", "isDeleted"]
+    if include_metadata:
+        fields += ["description", "color", "date", "startDate"]
+    result = query({"_root": [{"account": [{"milestones": fields}]}]})
+    rows = result.get("milestone", {})
+    if not isinstance(rows, dict) or any(not isinstance(row, dict) for row in rows.values()):
+        raise CliError(
+            "Invalid milestone records from the API", error_code="INVALID_QUERY", retryable=False
+        )
+    records = {
+        row.get("id", key): row
+        for key, row in rows.items()
+        if not _get_field(row, "is_deleted", "isDeleted")
+    }
+    config._cache["milestone_records"] = records
+    return records
+
+
 def load_milestone_names():
-    return _load_env_mapping("CODECKS_MILESTONES")
+    manual = _load_env_mapping("CODECKS_MILESTONES")
+    return {
+        mid: row.get("name") or manual.get(mid) or mid
+        for mid, row in _load_milestone_records().items()
+    }
 
 
 def load_users():
@@ -415,48 +441,27 @@ def list_tags():
     return query(q)
 
 
-def list_milestones():
-    """List milestones via direct API query, with .env name fallback.
-
-    Tries direct milestones query first (O(1) API call).
-    Falls back to card-scan approach if the direct query returns no data.
-    """
-    milestone_names = load_milestone_names()
-
-    # Direct API query for milestones (avoids scanning all cards)
-    try:
-        api_result = query({"_root": [{"account": [{"milestones": ["id", "name"]}]}]})
-        api_milestones = api_result.get("milestone", {})
-        if api_milestones:
-            milestone_map = {}
-            for _key, ms in api_milestones.items():
-                ms_id = ms.get("id", _key)
-                ms_name = ms.get("name") or milestone_names.get(ms_id, ms_id)
-                milestone_map[ms_id] = {"name": ms_name, "cards": []}
-            # Include any .env milestones not returned by API
-            for mid, name in milestone_names.items():
-                if mid not in milestone_map:
-                    milestone_map[mid] = {"name": name, "cards": []}
-            return milestone_map
-    except Exception:
-        pass  # Fall back to card-scan approach
-
-    # Fallback: scan cards for milestone IDs (original approach)
-    result = list_cards()
-    used_ids: dict[str, list] = {}
-    for _key, card in result.get("card", {}).items():
-        mid = _get_field(card, "milestone_id", "milestoneId")
-        if mid:
-            if mid not in used_ids:
-                used_ids[mid] = []
-            used_ids[mid].append(card.get("title", ""))
-    milestone_map = {}
-    for mid, name in milestone_names.items():
-        milestone_map[mid] = {"name": name, "cards": used_ids.get(mid, [])}
-    for mid, cards in used_ids.items():
-        if mid not in milestone_map:
-            milestone_map[mid] = {"name": mid, "cards": cards}
-    return milestone_map
+def list_milestones(*, include_metadata=False):
+    """List API milestones, using local names only for unnamed API records."""
+    records = _load_milestone_records(include_metadata=include_metadata)
+    manual = _load_env_mapping("CODECKS_MILESTONES")
+    output = {}
+    for mid, row in records.items():
+        info = {"name": row.get("name") or manual.get(mid) or mid, "cards": []}
+        if include_metadata:
+            for key in ("description", "color", "date"):
+                if key not in row:
+                    raise CliError(
+                        "Missing milestone metadata", error_code="INVALID_QUERY", retryable=False
+                    )
+                info[key] = row[key]
+            if "start_date" not in row and "startDate" not in row:
+                raise CliError(
+                    "Missing milestone start date", error_code="INVALID_QUERY", retryable=False
+                )
+            info["start_date"] = _get_field(row, "start_date", "startDate")
+        output[mid] = info
+    return output
 
 
 def list_activity(limit=20):
@@ -545,7 +550,11 @@ def enrich_cards(cards_dict, user_data=None):
     for _key, deck in decks_result.get("deck", {}).items():
         deck_names[deck.get("id")] = deck.get("title", "")
 
-    milestone_names = load_milestone_names()
+    milestone_names = (
+        load_milestone_names()
+        if any(_get_field(card, "milestone_id", "milestoneId") for card in cards_dict.values())
+        else {}
+    )
 
     # Build user name map from user_data (query result) or load_users()
     user_names = {}
@@ -962,40 +971,20 @@ def resolve_deck_id(deck_name, project=None):
 
 
 def resolve_milestone_id(milestone_name):
-    """Resolve milestone name to ID using .env mapping, with API fallback.
-
-    Steps:
-        1. Check env mapping (fast path).
-        2. Query Codecks API for all milestones (handles newly created ones).
-        3. Error with available names hint.
-    """
-    # Step 1: Check env mapping (fast path)
-    milestone_names = load_milestone_names()
-    for mid, name in milestone_names.items():
-        if name.lower() == milestone_name.lower():
-            return mid
-
-    # Step 2: API fallback — query Codecks for milestones not yet in .env
-    try:
-        result = query({"_root": [{"account": [{"milestones": ["id", "name"]}]}]})
-        for _key, ms in result.get("milestone", {}).items():
-            if (ms.get("name") or "").lower() == milestone_name.lower():
-                ms_id = ms.get("id", _key)
-                # Auto-register so future lookups are fast
-                existing = config.env.get("CODECKS_MILESTONES", "")
-                new_entry = f"{ms_id}={ms.get('name', milestone_name)}"
-                if ms_id not in existing:
-                    updated = f"{existing},{new_entry}" if existing else new_entry
-                    config.save_env_value("CODECKS_MILESTONES", updated)
-                    config.env["CODECKS_MILESTONES"] = updated
-                return ms_id
-    except CliError:
-        pass
-
-    # Step 3: Error with helpful hint
-    available = list(milestone_names.values())
-    hint = f" Available: {', '.join(available)}" if available else ""
+    """Resolve an API-backed name; reject ambiguous names and stale local aliases."""
+    names = load_milestone_names()
+    matches = [mid for mid, name in names.items() if name.lower() == milestone_name.lower()]
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        raise CliError(
+            f"Milestone '{milestone_name}' is ambiguous",
+            error_code="INVALID_INPUT",
+            retryable=False,
+        )
+    available = ", ".join(names.values())
     raise CliError(
-        f"[ERROR] Milestone '{milestone_name}' not found.{hint} "
-        "Add milestones to .env: CODECKS_MILESTONES=<id>=<name>"
+        f"Milestone '{milestone_name}' not found. Available: {available}",
+        error_code="INVALID_INPUT",
+        retryable=False,
     )

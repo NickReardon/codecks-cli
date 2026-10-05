@@ -20,6 +20,7 @@ Discovered endpoints and their field names:
 """
 
 import json
+from datetime import date
 from typing import Any
 from uuid import UUID
 
@@ -31,6 +32,15 @@ from codecks_cli.exceptions import CliError
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _validate_admin_uuid(value: Any, name: str) -> str:
+    try:
+        if isinstance(value, str) and str(UUID(value)) == value.lower():
+            return value.lower()
+    except ValueError:
+        pass
+    raise CliError(f"{name} must be a full UUID", error_code="INVALID_INPUT", retryable=False)
 
 
 def _get_account_id() -> str:
@@ -188,7 +198,7 @@ def create_deck(name: str, project: str | None = None) -> dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 
-VALID_MILESTONE_COLORS = {"blue", "green", "red", "yellow", "purple", "orange", "pink", "teal"}
+VALID_MILESTONE_COLORS = {"gray", "brown", "yellow", "red", "pink", "blue", "green"}
 
 
 def create_milestone(
@@ -199,15 +209,13 @@ def create_milestone(
 ) -> dict[str, Any]:
     """Create a release milestone via dispatch API.
 
-    Auto-registers the new milestone in ``.env`` and in-memory config so it's
-    immediately resolvable by name without a server restart.
+    Invalidates API-backed milestone records after creation.
 
     Args:
         name: Milestone name.
         target_date: Target date (YYYY-MM-DD). Defaults to 30 days from now.
         project: Project name (defaults to primary project).
-        color: Milestone color. One of: blue, green, red, yellow, purple,
-               orange, pink, teal. Default: blue.
+        color: Milestone color: gray, brown, yellow, red, pink, blue, green.
 
     Returns:
         Dict with ok, milestone_name, milestone_id, and source.
@@ -246,13 +254,7 @@ def create_milestone(
         result = api.dispatch("milestones/create", payload)
         milestone_id = result.get("payload", {}).get("id", "")
 
-        # Auto-register in .env and in-memory config
-        if milestone_id:
-            existing = config.env.get("CODECKS_MILESTONES", "")
-            new_entry = f"{milestone_id}={name}"
-            updated = f"{existing},{new_entry}" if existing else new_entry
-            config.save_env_value("CODECKS_MILESTONES", updated)
-            config.env["CODECKS_MILESTONES"] = updated
+        config._cache.pop("milestone_records", None)
 
         return {
             "ok": True,
@@ -310,14 +312,7 @@ def update_deck(deck_id: str, fields: dict[str, Any]) -> dict[str, Any]:
     def invalid(message: str) -> None:
         raise CliError(message, error_code="INVALID_INPUT", retryable=False)
 
-    def validate_uuid(value: Any, name: str) -> None:
-        try:
-            if not isinstance(value, str) or str(UUID(value)) != value.lower():
-                invalid(f"{name} must be a full UUID")
-        except (ValueError, AttributeError):
-            invalid(f"{name} must be a full UUID")
-
-    validate_uuid(deck_id, "deck_id")
+    deck_id = _validate_admin_uuid(deck_id, "deck_id")
     allowed = {"title", "description", "deckType", "defaultCard"}
     if not isinstance(fields, dict) or not fields or fields.keys() - allowed:
         invalid(
@@ -356,7 +351,7 @@ def update_deck(deck_id: str, fields: dict[str, Any]) -> dict[str, Any]:
         if effort is not None and (type(effort) is not int or not 0 <= effort <= 2147483647):
             invalid("defaultCard.effort must be a nonnegative int32 or null")
         if template.get("assigneeId") is not None:
-            validate_uuid(template["assigneeId"], "defaultCard.assigneeId")
+            _validate_admin_uuid(template["assigneeId"], "defaultCard.assigneeId")
         if "masterTags" in template:
             tags = template["masterTags"]
             if (
@@ -386,6 +381,71 @@ def update_deck(deck_id: str, fields: dict[str, Any]) -> dict[str, Any]:
     finally:
         config._cache.pop("decks", None)
     return {"ok": True, "deck_id": deck_id.lower(), "updated_fields": list(fields), "source": "api"}
+
+
+def update_milestone(milestone_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+    """Edit milestone metadata and verify every submitted field."""
+    milestone_id = _validate_admin_uuid(milestone_id, "milestone_id")
+    allowed = {"name", "description", "color", "date", "startDate"}
+    if not isinstance(fields, dict) or not fields or fields.keys() - allowed:
+        raise CliError(
+            "Provide a nonempty object with name, description, color, date or startDate",
+            error_code="INVALID_INPUT",
+            retryable=False,
+        )
+    for key, maximum in (("name", 500), ("description", 10000)):
+        if key in fields and (
+            not isinstance(fields[key], str)
+            or len(fields[key]) > maximum
+            or (key == "name" and not fields[key].strip())
+        ):
+            raise CliError(
+                f"{key} must be a string of at most {maximum} characters; name cannot be empty",
+                error_code="INVALID_INPUT",
+                retryable=False,
+            )
+    if "color" in fields and (
+        not isinstance(fields["color"], str) or fields["color"] not in VALID_MILESTONE_COLORS
+    ):
+        raise CliError("Invalid milestone color", error_code="INVALID_INPUT", retryable=False)
+    for key in ("date", "startDate"):
+        if key not in fields or (key == "startDate" and fields[key] is None):
+            continue
+        try:
+            value = fields[key]
+            if not isinstance(value, str) or date.fromisoformat(value).isoformat() != value:
+                raise ValueError
+        except ValueError:
+            raise CliError(
+                f"{key} must be a calendar date in YYYY-MM-DD format",
+                error_code="INVALID_INPUT",
+                retryable=False,
+            ) from None
+    try:
+        api.dispatch("milestones/update", {"id": milestone_id, **fields})
+        try:
+            data = api.query({f"milestone({json.dumps([milestone_id])})": list(fields)})
+            row = data.get("milestone", {}).get(milestone_id, {})
+            if isinstance(row, dict) and "start_date" in row:
+                row = {**row, "startDate": row["start_date"]}
+            if not isinstance(row, dict) or any(
+                key not in row or row[key] != value for key, value in fields.items()
+            ):
+                raise CliError("Milestone read-back does not match the requested fields")
+        except (CliError, AttributeError, TypeError) as error:
+            raise CliError(
+                "Milestone update was submitted but could not be verified. Read its metadata before retrying.",
+                error_code="MILESTONE_UPDATE_UNVERIFIED",
+                retryable=False,
+            ) from error
+    finally:
+        config._cache.pop("milestone_records", None)
+    return {
+        "ok": True,
+        "milestone_id": milestone_id,
+        "updated_fields": list(fields),
+        "source": "api",
+    }
 
 
 def archive_deck(deck_name: str, project: str | None = None) -> dict[str, Any]:

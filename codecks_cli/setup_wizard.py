@@ -15,10 +15,9 @@ from codecks_cli.api import (
 )
 from codecks_cli.cards import (
     _load_env_mapping,
+    _load_milestone_records,
     _load_project_records,
-    list_cards,
     list_decks,
-    load_milestone_names,
     load_project_names,
 )
 
@@ -56,54 +55,30 @@ def _setup_discover_projects():
 
 
 def _setup_discover_milestones():
-    """Discover milestones from cards and save to .env."""
+    """Show API milestone names; ask only when a name is missing."""
     print("Discovering milestones...")
-    cards_result = _try_call(list_cards)
-    if not cards_result or not cards_result.get("card"):
-        print("  Could not fetch cards. Skipping milestone discovery.")
+    milestones = _try_call(_load_milestone_records)
+    if not milestones:
+        print("  No milestones found.")
         return
-
-    # Group cards by milestone
-    milestone_cards: dict[str, list[str]] = {}
-    for _key, card in cards_result.get("card", {}).items():
-        mid = _get_field(card, "milestone_id", "milestoneId")
-        if mid:
-            if mid not in milestone_cards:
-                milestone_cards[mid] = []
-            title = card.get("title", "")
-            if title:
-                milestone_cards[mid].append(title)
-
-    if not milestone_cards:
-        print("  No milestones found in your cards.")
-        config.save_env_value("CODECKS_MILESTONES", "")
-        return
-
-    existing_names = load_milestone_names()
-
-    print(f"  Found {len(milestone_cards)} milestone(s):\n")
-    milestone_pairs = []
-    for mid, card_titles in milestone_cards.items():
-        existing_name = existing_names.get(mid)
-        # Show sample cards to help user identify the milestone
-        sample = ", ".join(card_titles[:3])
-        if len(card_titles) > 3:
-            sample += f" (+{len(card_titles) - 3} more)"
-        print(f"    Cards in this milestone: {sample}")
-
-        if existing_name:
-            name_input = input(f"    Milestone name [{existing_name}]: ").strip()
-            name = name_input if name_input else existing_name
-        else:
-            name = input("    Give this milestone a name: ").strip()
-            if not name:
-                name = mid[:8]
-                print(f"      Using: {name}")
-        milestone_pairs.append(f"{mid}={name}")
-        print()
-
-    config.save_env_value("CODECKS_MILESTONES", ",".join(milestone_pairs))
-    print(f"  Saved {len(milestone_pairs)} milestone(s) to .env\n")
+    print(f"  Found {len(milestones)} milestone(s):")
+    manual_names = _load_env_mapping("CODECKS_MILESTONES")
+    changed = False
+    for mid, milestone in milestones.items():
+        name = milestone.get("name")
+        if not name:
+            prior = manual_names.get(mid, "")
+            entered = input(f"    Milestone name for {mid} [{prior}]: ").strip()
+            name = entered or prior or mid
+            if entered:
+                manual_names[mid] = entered
+                changed = True
+        print(f"    {name}")
+    if changed:
+        mapping = ",".join(f"{mid}={name}" for mid, name in manual_names.items())
+        config.save_env_value("CODECKS_MILESTONES", mapping)
+        config.env["CODECKS_MILESTONES"] = mapping
+    print()
 
 
 def _setup_discover_user():

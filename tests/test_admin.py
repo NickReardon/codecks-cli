@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from codecks_cli import config
-from codecks_cli.admin import create_deck, update_deck
+from codecks_cli.admin import create_deck, update_deck, update_milestone
 from codecks_cli.exceptions import CliError
 
 
@@ -107,6 +107,90 @@ def test_update_deck_rejects_invalid_fields_before_dispatch(deck_id, fields):
 
 
 _PID = "project-1"
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {
+            "name": "Renamed",
+            "description": "",
+            "color": "brown",
+            "date": "2028-02-29",
+            "startDate": None,
+        },
+        {"startDate": "2026-10-05"},
+        *[{"color": c} for c in ("gray", "brown", "yellow", "red", "pink", "blue", "green")],
+    ],
+)
+def test_update_milestone_verified_fields_and_cache(fields):
+    mid = "00000000-0000-0000-0000-000000000001"
+    returned = {("start_date" if k == "startDate" else k): v for k, v in fields.items()}
+    config._cache["milestone_records"] = {mid: {"name": "Old"}}
+    with (
+        patch("codecks_cli.admin.api.dispatch", return_value={}) as dispatch,
+        patch("codecks_cli.admin.api.query", return_value={"milestone": {mid: returned}}),
+    ):
+        assert update_milestone(mid, fields)["ok"]
+        dispatch.assert_called_once_with("milestones/update", {"id": mid, **fields})
+    assert "milestone_records" not in config._cache
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        None,
+        {},
+        {"id": "other"},
+        {"projectIds": []},
+        {"name": " "},
+        {"name": True},
+        {"description": None},
+        {"color": []},
+        {"color": "purple"},
+        {"date": None},
+        {"date": "2026-02-29"},
+        {"date": "20261005"},
+        {"date": "2026-1-5"},
+        {"startDate": "2026-13-01"},
+        {"date": 1},
+    ],
+)
+def test_update_milestone_rejects_invalid_fields(fields):
+    with patch("codecks_cli.admin.api.dispatch") as dispatch:
+        with pytest.raises(CliError) as error:
+            update_milestone("00000000-0000-0000-0000-000000000001", fields)
+        assert error.value.error_code == "INVALID_INPUT"
+        dispatch.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {},
+        {"milestone": {}},
+        {"milestone": {"00000000-0000-0000-0000-000000000001": {"name": "Old"}}},
+        CliError("read failed", error_code="NETWORK_ERROR", retryable=True),
+    ],
+)
+def test_update_milestone_unverified_write_is_not_retryable(reply):
+    mid = "00000000-0000-0000-0000-000000000001"
+    config._cache["milestone_records"] = {}
+    with (
+        patch("codecks_cli.admin.api.dispatch", return_value={}),
+        patch("codecks_cli.admin.api.query") as query,
+    ):
+        if isinstance(reply, Exception):
+            query.side_effect = reply
+        else:
+            query.return_value = reply
+        with pytest.raises(CliError) as error:
+            update_milestone(mid, {"name": "New", "startDate": None})
+        assert (
+            error.value.error_code == "MILESTONE_UPDATE_UNVERIFIED"
+            and error.value.retryable is False
+        )
+    assert "milestone_records" not in config._cache
 
 
 def _caching_list_decks(decks):

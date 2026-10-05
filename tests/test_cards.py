@@ -42,6 +42,61 @@ def test_deck_metadata_bypasses_existing_cache():
     assert "old" in config._cache["decks"]["deck"]
 
 
+def test_milestone_names_authoritative_and_shared_with_enrichment():
+    config.env["CODECKS_MILESTONES"] = "m1=Old,m2=Fallback,ghost=Deleted"
+    rows = {
+        "m1": {"id": "m1", "name": "New"},
+        "m2": {"id": "m2", "name": ""},
+        "m3": {"name": "Deleted", "is_deleted": True},
+    }
+    with (
+        patch("codecks_cli.cards.query", return_value={"milestone": rows}) as query,
+        patch("codecks_cli.cards.list_decks", return_value={}),
+        patch("codecks_cli.cards.load_users", return_value={}),
+    ):
+        assert load_milestone_names() == {"m1": "New", "m2": "Fallback"}
+        assert resolve_milestone_id("new") == "m1"
+        with pytest.raises(CliError, match="not found"):
+            resolve_milestone_id("Old")
+        assert enrich_cards({"c": {"milestoneId": "m1"}})["c"]["milestone_name"] == "New"
+        query.assert_called_once()
+
+
+def test_milestone_metadata_bypasses_cache_and_does_not_hide_api_failure():
+    config._cache["milestone_records"] = {"old": {"name": "Cached"}}
+    fresh = {
+        "name": "New",
+        "description": "",
+        "color": "blue",
+        "date": "2026-10-05",
+        "startDate": None,
+    }
+    with patch("codecks_cli.cards.query", return_value={"milestone": {"m1": fresh}}):
+        assert cards_mod.list_milestones(include_metadata=True)["m1"]["start_date"] is None
+    assert "old" not in config._cache["milestone_records"]
+    assert resolve_milestone_id("New") == "m1"
+    with pytest.raises(CliError, match="not found"):
+        resolve_milestone_id("Cached")
+    with patch(
+        "codecks_cli.cards.query", side_effect=CliError("denied", error_code="PERMISSION_DENIED")
+    ):
+        with pytest.raises(CliError) as error:
+            cards_mod.list_milestones(include_metadata=True)
+        assert error.value.error_code == "PERMISSION_DENIED"
+
+
+def test_milestone_empty_api_does_not_resurrect_local_names():
+    config.env["CODECKS_MILESTONES"] = "m1=Deleted"
+    with patch("codecks_cli.cards.query", return_value={}):
+        assert cards_mod.list_milestones() == {}
+
+
+def test_ambiguous_milestone_names_are_rejected():
+    config._cache["milestone_records"] = {"a": {"name": "Same"}, "b": {"name": "same"}}
+    with pytest.raises(CliError, match="ambiguous"):
+        resolve_milestone_id("SAME")
+
+
 # ---------------------------------------------------------------------------
 # _load_env_mapping / load_project_names / load_milestone_names
 # ---------------------------------------------------------------------------
@@ -83,7 +138,6 @@ class TestLoadEnvMapping:
         assert load_project_names() == {"p1": "Tea Shop"}
         assert load_project_names() == {"p1": "Tea Shop"}
         mock_query.assert_called_once_with({"_root": [{"account": [{"projects": ["id", "name"]}]}]})
-        assert load_milestone_names() == {"m1": "MVP"}
 
     @patch("codecks_cli.cards.query")
     def test_project_name_uses_manual_fallback_only_when_api_name_missing(
@@ -493,7 +547,9 @@ class TestEnrichCards:
         assert result["c1"]["tags"] == []
 
     def test_resolves_milestone_name(self, monkeypatch):
-        monkeypatch.setattr(config, "env", {"CODECKS_MILESTONES": "ms-1=MVP"})
+        monkeypatch.setattr(config, "env", {"CODECKS_MILESTONES": "ms-1=Stale Name"})
+        config._cache["milestone_records"] = {"ms-1": {"name": "MVP"}}
+        config._cache["milestone_records"] = {"ms-1": {"name": "MVP"}}
         cards = {"c1": {"milestoneId": "ms-1"}}
         result = enrich_cards(cards)
         assert result["c1"]["milestone_name"] == "MVP"
@@ -597,15 +653,18 @@ class TestResolvers:
         assert exc_info.value.exit_code == 1
 
     def testresolve_milestone_id_found(self, monkeypatch):
-        monkeypatch.setattr(config, "env", {"CODECKS_MILESTONES": "ms-1=MVP"})
+        monkeypatch.setattr(config, "env", {"CODECKS_MILESTONES": "ms-1=Stale Name"})
+        config._cache["milestone_records"] = {"ms-1": {"name": "MVP"}}
         assert resolve_milestone_id("MVP") == "ms-1"
 
     def testresolve_milestone_id_case_insensitive(self, monkeypatch):
-        monkeypatch.setattr(config, "env", {"CODECKS_MILESTONES": "ms-1=MVP"})
+        monkeypatch.setattr(config, "env", {"CODECKS_MILESTONES": "ms-1=Stale Name"})
+        config._cache["milestone_records"] = {"ms-1": {"name": "MVP"}}
         assert resolve_milestone_id("mvp") == "ms-1"
 
     def testresolve_milestone_id_not_found_exits(self, monkeypatch):
-        monkeypatch.setattr(config, "env", {"CODECKS_MILESTONES": "ms-1=MVP"})
+        monkeypatch.setattr(config, "env", {"CODECKS_MILESTONES": "ms-1=Stale Name"})
+        config._cache["milestone_records"] = {"ms-1": {"name": "MVP"}}
         with pytest.raises(CliError) as exc_info:
             resolve_milestone_id("Nonexistent")
         assert exc_info.value.exit_code == 1
@@ -905,11 +964,9 @@ class TestResolveMilestoneId:
         assert resolve_milestone_id("alpha") == "m1"  # case-insensitive
 
     @patch("codecks_cli.cards.query")
-    @patch("codecks_cli.cards.load_milestone_names")
-    def test_api_fallback(self, mock_milestones, mock_query):
+    def test_api_names(self, mock_query):
         from codecks_cli.cards import resolve_milestone_id
 
-        mock_milestones.return_value = {}  # not in .env
         mock_query.return_value = {"milestone": {"m1": {"id": "m1", "name": "Gamma"}}}
         with patch("codecks_cli.config.save_env_value"):
             assert resolve_milestone_id("Gamma") == "m1"

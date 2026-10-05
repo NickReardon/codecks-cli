@@ -12,9 +12,9 @@ Package structure (see .claude/maps/mcp-server.md for tool index):
   _tools_local.py   — 4 local tools (session_start, workflow preferences)
   _tools_team.py    — 6 team coordination tools (claim, delegate, partition, dashboard)
   _prompts.py       — 2 MCP prompts (pm-session, setup-guide)
-  _tools_admin.py   — 5 admin tools (project/deck/milestone/tag creation, deck archival)
+  _tools_admin.py   — 7 admin tools (creation, deck/milestone editing, deck deletion)
 
-60 tools total.
+62 tools total.
 
 Run: py -m codecks_cli.mcp_server
 Requires: py -m pip install .[mcp]
@@ -36,7 +36,7 @@ from codecks_cli.mcp_server import (
 mcp = MCPServer(
     "codecks",
     instructions=(
-        "Codecks project management tools (60 tools). "
+        "Codecks project management tools. "
         "All card IDs must be full 36-char UUIDs. "
         "Use resolve_card_ids() to translate #card numbers and $Codecks references first. "
         "Doc cards: no status/priority/effort. "
@@ -137,7 +137,7 @@ from codecks_cli.mcp_server._tools_admin import (
 from codecks_cli.mcp_server._tools_admin import (
     create_milestone as create_milestone_admin,
 )
-from codecks_cli.mcp_server._tools_admin import create_project, update_deck
+from codecks_cli.mcp_server._tools_admin import create_project, update_deck, update_milestone
 from codecks_cli.mcp_server._tools_admin import (
     create_tag as create_tag_admin,
 )

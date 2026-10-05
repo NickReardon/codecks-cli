@@ -412,7 +412,7 @@ report = client.standup(days=3, project="My Project")
 | **Hand** | `list_hand`, `add_to_hand`, `remove_from_hand` |
 | **Mutations** | `create_card`, `attach_files`, `update_cards`, `mark_done`, `mark_started`, `archive_card`, `unarchive_card`, `delete_card`, `scaffold_feature`, `split_features` |
 | **Comments** | `create_comment`, `reply_comment`, `close_comment`, `reopen_comment`, `list_conversations` |
-| **Admin** | `create_project`, `create_deck`, `update_deck`, `create_milestone`, `create_tag`, `archive_deck_admin` |
+| **Admin** | `create_project`, `create_deck`, `update_deck`, `create_milestone`, `update_milestone`, `create_tag`, `archive_deck_admin` |
 | **Journeys** | `get_journey`, `create_journey_step`, `update_journey_step`, `order_journey_steps`, `start_journey` |
 | **Raw API** | `raw_query`, `raw_dispatch` |
 
@@ -421,3 +421,5 @@ All methods use keyword-only arguments and return `dict[str, Any]`.
 `client.list_projects(include_archived=True)` includes archived projects. Results include `visibility`. `client.update_deck(deck_id, fields={...})` edits title, description, deckType or the experimental defaultCard template. See [deck update semantics](mcp-reference.md#deck-updates-and-archived-projects).
 
 For template editing, call `client.list_decks(include_card_counts=False, include_metadata=True)` to read fresh metadata and preserve existing defaults. Template writes verify the stored replacement before reporting success. `DECK_UPDATE_UNVERIFIED` requires checking state before retrying.
+
+`client.update_milestone(milestone_id, fields={...})` edits milestone metadata with verified read-back. `client.list_milestones(include_metadata=True)` reads fresh descriptions, colors and dates. See [milestone editing](mcp-reference.md#milestone-metadata-editing) for supported fields and clearing/error semantics.

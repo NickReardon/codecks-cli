@@ -515,9 +515,27 @@ def list_projects(include_archived: bool = False) -> dict:
     return _finalize_tool_result(_call("list_projects", include_archived=include_archived))
 
 
-def list_milestones() -> dict:
-    """List all milestones with card counts."""
-    return _finalize_tool_result(_call("list_milestones"))
+def list_milestones(include_metadata: bool = False) -> dict:
+    """List API milestones. include_metadata reads fresh descriptions, colors and dates.
+
+    Metadata includes nullable start_date. Names and descriptions in metadata
+    carry USER_DATA boundaries; remove wrappers before resubmitting text.
+    """
+    result = (
+        _call("list_milestones", include_metadata=True)
+        if include_metadata
+        else _call("list_milestones")
+    )
+    if include_metadata and isinstance(result, list):
+        result = [
+            {
+                **row,
+                "name": _tag_user_text(row.get("name")),
+                "description": _tag_user_text(row.get("description")),
+            }
+            for row in result
+        ]
+    return _finalize_tool_result(result)
 
 
 def list_tags() -> dict:

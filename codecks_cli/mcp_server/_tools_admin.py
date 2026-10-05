@@ -1,4 +1,4 @@
-"""Admin tools: project, deck, milestone, tag creation and deck editing (6 tools).
+"""Admin tools: project, deck, milestone, tag creation and metadata editing (7 tools).
 
 Uses direct Codecks dispatch API endpoints. All calls are offloaded to a worker
 thread via asyncio.to_thread() since the MCP server runs in an asyncio event loop.
@@ -82,21 +82,20 @@ async def create_milestone(
 ) -> dict:
     """Create a release milestone.
 
-    Uses direct Codecks dispatch API. Auto-registers in .env for immediate
-    name resolution without server restart.
+    Uses direct Codecks dispatch API and API-backed name resolution.
 
     Args:
         name: Milestone name (e.g., "Alpha").
         target_date: Optional target date (YYYY-MM or YYYY-MM-DD).
         project: Project name. Defaults to the primary project.
-        color: Milestone color. Valid values: blue, green, red, yellow.
+        color: Milestone color: gray, brown, yellow, red, pink, blue, green.
                Default: blue.
 
     Returns:
         Dict with ok, milestone_name, milestone_id, color, source.
     """
-    # Pre-flight color validation (Codecks API is more restrictive than Python code)
-    _API_VALID_COLORS = {"blue", "green", "red", "yellow"}
+    from codecks_cli.admin import VALID_MILESTONE_COLORS as _API_VALID_COLORS
+
     if color and color.lower().strip() not in _API_VALID_COLORS:
         return _finalize_tool_result(
             _contract_error(
@@ -193,6 +192,23 @@ async def update_deck(deck_id: str, fields: dict) -> dict:
     return _finalize_tool_result(result)
 
 
+async def update_milestone(milestone_id: str, fields: dict) -> dict:
+    """Edit milestone name, description, color, date or startDate by full UUID.
+
+    Omitted fields remain unchanged. description="" clears text; startDate=null
+    clears the start date. Dates must be YYYY-MM-DD. Colors: gray, brown, yellow,
+    red, pink, blue, green. Reads back all submitted fields before success.
+    MILESTONE_UPDATE_UNVERIFIED means inspect fresh metadata before retrying.
+    """
+    result = await asyncio.to_thread(
+        _call, "update_milestone", milestone_id=milestone_id, fields=fields
+    )
+    if result.get("ok") is False and result.get("error_code") != "INVALID_INPUT":
+        _invalidate_cache()
+        _persist_cache_to_disk()
+    return _finalize_tool_result(result)
+
+
 def register(mcp):
     """Register all admin tools with the MCPServer instance."""
     mcp.tool()(create_project)
@@ -201,3 +217,4 @@ def register(mcp):
     mcp.tool()(create_tag)
     mcp.tool()(archive_deck)
     mcp.tool()(update_deck)
+    mcp.tool()(update_milestone)

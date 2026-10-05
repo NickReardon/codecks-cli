@@ -623,13 +623,13 @@ class CodecksClient:
             )
         return result
 
-    def list_milestones(self) -> list[dict[str, Any]]:
-        """List all milestones.
+    def list_milestones(self, *, include_metadata: bool = False) -> list[dict[str, Any]]:
+        """List API milestones, with optional fresh descriptions, colors and dates.
 
         Returns:
             list of milestone dicts with id, name, card_count.
         """
-        raw = list_milestones()
+        raw = list_milestones(include_metadata=True) if include_metadata else list_milestones()
         result = []
         for mid, info in raw.items():
             result.append(
@@ -639,6 +639,10 @@ class CodecksClient:
                     "card_count": len(info.get("cards", [])),
                 }
             )
+            if include_metadata:
+                result[-1].update(
+                    {key: info[key] for key in ("description", "color", "date", "start_date")}
+                )
         return result
 
     def list_tags(self) -> list[dict[str, Any]]:
@@ -1489,6 +1493,12 @@ class CodecksClient:
         from codecks_cli import admin
 
         return admin.update_deck(deck_id, fields)
+
+    def update_milestone(self, milestone_id: str, *, fields: dict[str, Any]) -> dict[str, Any]:
+        """Edit name, description, color, date or startDate by UUID, with read-back."""
+        from codecks_cli import admin
+
+        return admin.update_milestone(milestone_id, fields)
 
     def create_milestone(self, name: str, target_date: str | None = None) -> dict[str, Any]:
         """Create a release milestone.

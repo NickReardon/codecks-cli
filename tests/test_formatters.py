@@ -440,6 +440,28 @@ class TestFormatCardsCsv:
 
 
 class TestFormatActivityTable:
+    def test_milestone_names_loaded_only_for_relevant_diffs(self, monkeypatch):
+        from unittest.mock import patch
+
+        from codecks_cli.formatters._activity import format_activity_table
+
+        with (
+            patch(
+                "codecks_cli.formatters._activity.load_milestone_names",
+                return_value={"m": "Renamed"},
+            ) as names,
+            patch("codecks_cli.formatters._activity.load_users", return_value={}),
+        ):
+            assert "Renamed" in format_activity_table(
+                {"activity": {"a": {"data": {"diff": {"milestoneId": [None, "m"]}}}}}
+            )
+            names.assert_called_once()
+            names.reset_mock()
+            format_activity_table(
+                {"activity": {"a": {"data": {"diff": {"status": ["started", "done"]}}}}}
+            )
+            names.assert_not_called()
+
     def test_shows_card_title(self, monkeypatch):
         monkeypatch.setattr(config, "env", {})
         from codecks_cli.formatters import format_activity_table

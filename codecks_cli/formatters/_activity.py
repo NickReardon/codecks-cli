@@ -27,7 +27,11 @@ def format_activity_table(result):
     users = result.get("user", {})
     decks = result.get("deck", {})
     card_data = result.get("card", {})
-    ms_names = load_milestone_names()
+    ms_names = (
+        load_milestone_names()
+        if any("milestoneId" in act.get("data", {}).get("diff", {}) for act in activities.values())
+        else {}
+    )
     user_names = load_users()
     cols = [("Time", 18), ("Type", 18), ("By", 12), ("Deck", 14), ("Card", 20), ("Details", 0)]
     rows = []
