@@ -71,12 +71,20 @@ accepts `visibility`. Omitted fields stay unchanged; nullable values clear them.
 Ordering requires steps and target in the same deck. Dependency editing is
 excluded under the project's paid-feature policy.
 
-Journey actions use internal `workflows/createItem`, `updateItem`, `addItemsAfter`
-and `apply` endpoints. Journey read fields are also internal. These are outside
+Journey actions use internal `workflows/createItem`, `updateItem`, `addItemsAfter`,
+`addItemsBefore` and `apply` endpoints. These actions are outside
 Codecks' documented API stability contract. Scoped API tokens may reject them
 even with Producer permission. Such denials propagate through the normal error
-contract; there is no legacy browser-auth fallback. Official-token live write
-validation is pending. Repeating `start_journey` may create duplicate tasks.
+contract; there is no legacy browser-auth fallback. Reads return only active
+steps. Beginning-of-zone moves anchor before the first unmoved active step.
+Starting a Journey sends explicit active step IDs and skips steps already
+represented by child cards. Starts on the same parent are serialized within one
+process and the resulting children are verified after creation. An uncertain
+write returns non-retryable `JOURNEY_OUTCOME_UNKNOWN`; further starts on that
+parent only submit after all previously submitted steps are visible. Reconcile
+the parent's children before retrying. This protection is process-local and is
+lost on restart. Codecks' apply endpoint creates duplicates on request replay,
+including when the same request ID and idempotency key are reused.
 
 ## Prompt Surface
 

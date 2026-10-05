@@ -25,7 +25,7 @@ def _finish_write(result: dict) -> dict:
 
 
 def get_journey(deck_id: str) -> dict:
-    """Read a deck's native Journey steps, zones and ordering. deck_id is a UUID.
+    """Read a deck's active native Journey steps, zones and ordering. deck_id is a UUID.
 
     Experimental: internal API fields may reject scoped tokens or change.
     """
@@ -93,8 +93,12 @@ def order_journey_steps(
 def start_journey(card_id: str) -> dict:
     """Apply a card's native Journey and create its tasks. This is a write.
 
-    Accepts a full UUID, #card number, or $Codecks reference. Repeated calls may
-    create duplicate tasks. Experimental internal API; token denials propagate.
+    Accepts a full UUID, #card number, or $Codecks reference. Applies active
+    steps not already represented by child cards. Experimental internal API;
+    token denials propagate. Starts on the same parent are serialized within
+    this process and verified after creation. An uncertain write is not retried;
+    further starts wait until its submitted steps are visible. Protection does
+    not survive process restarts or coordinate other processes.
     """
     return _finish_write(_call("start_journey", card_id=card_id))
 
