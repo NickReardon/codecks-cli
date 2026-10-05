@@ -2,6 +2,7 @@
 Mocks at cards.*/api.* boundary. Asserts on returned dicts, not stdout.
 """
 
+import json
 from datetime import UTC
 from unittest.mock import patch
 
@@ -22,6 +23,74 @@ from codecks_cli.exceptions import CliError
 def _client():
     """Create a CodecksClient with token validation skipped."""
     return CodecksClient(validate_token=False)
+
+
+def test_card_history_uses_live_ordered_pages_and_preserves_encoded_diffs():
+    card_id = "00000000-0000-0000-0000-000000000001"
+    relation = f"diffs({json.dumps({'$order': '-version', '$limit': 2, '$offset': 1})})"
+    data = {
+        "card": {card_id: {"version": 4, relation: ["v3", "v2"]}},
+        "cardHistory": {
+            "v3": {
+                "version": 3,
+                "changerId": "user",
+                "versionCreatedAt": "now",
+                "diff": {"content": "encoded"},
+            },
+            "v2": {"version": 2, "changerId": None, "versionCreatedAt": "earlier", "diff": {}},
+        },
+        "user": {"user": {"name": "Nick"}},
+    }
+    with (
+        patch(
+            "codecks_cli.client.resolve_card_ids", return_value={"cards": [{"id": card_id}]}
+        ) as resolve,
+        patch("codecks_cli.client.query", return_value=data) as request,
+    ):
+        result = _client().get_card_history("#1", limit=1, offset=1)
+        assert result["history"] == [
+            {
+                "version": 3,
+                "changer_id": "user",
+                "changer_name": "Nick",
+                "changed_at": "now",
+                "diff": {"content": "encoded"},
+            }
+        ]
+        assert result["current_version"] == 4
+        assert result["has_more"] and result["next_offset"] == 2
+        assert relation in request.call_args.args[0][f"card({json.dumps([card_id])})"][1]
+        resolve.assert_called_once_with(["#1"])
+        data["card"][card_id][relation] = []
+        result = _client().get_card_history(card_id, limit=1, offset=1)
+        assert result["history"] == [] and result["next_offset"] is None
+        assert result["has_more"] is False
+        data["card"][card_id][relation] = ["v2"]
+        result = _client().get_card_history(card_id, limit=1, offset=1)
+        assert result["history"][0]["changer_id"] is None
+        assert result["history"][0]["changer_name"] is None
+        data["card"][card_id][relation] = ["missing"]
+        with pytest.raises(CliError, match="Incomplete"):
+            _client().get_card_history(card_id, limit=1, offset=1)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"limit": 0},
+        {"limit": 101},
+        {"limit": True},
+        {"offset": -1},
+        {"offset": True},
+        {"offset": 2**31},
+    ],
+)
+def test_card_history_rejects_invalid_page_before_api_calls(kwargs):
+    with patch("codecks_cli.client.resolve_card_ids") as resolve:
+        with pytest.raises(CliError) as error:
+            _client().get_card_history("#1", **kwargs)
+        assert error.value.error_code == "INVALID_INPUT"
+        resolve.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

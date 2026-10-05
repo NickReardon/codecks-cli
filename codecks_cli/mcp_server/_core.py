@@ -874,6 +874,7 @@ _ALLOWED_METHODS = {
     "get_account",
     "list_cards",
     "get_card",
+    "get_card_history",
     "list_decks",
     "list_projects",
     "list_milestones",

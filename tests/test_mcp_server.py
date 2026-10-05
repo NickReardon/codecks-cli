@@ -40,6 +40,64 @@ def _mock_client(**method_returns):
     return client
 
 
+@pytest.mark.parametrize(
+    "row",
+    [
+        None,
+        {},
+        {"version": 1},
+        {"diff": {}},
+        {"version": True, "diff": {}},
+        {"version": 1, "diff": []},
+        {"version": 1, "diff": {}, "versionCreatedAt": None},
+    ],
+)
+def test_card_history_malformed_api_rows_are_non_retryable(row):
+    from codecks_cli.client import CodecksClient
+
+    relation = f"diffs({json.dumps({'$order': '-version', '$limit': 21, '$offset': 0})})"
+    data = {"card": {_C1: {"version": 1, relation: ["v1"]}}, "cardHistory": {"v1": row}}
+    with (
+        patch.object(_core, "_get_client", return_value=CodecksClient(validate_token=False)),
+        patch("codecks_cli.client.resolve_card_ids", return_value={"cards": [{"id": _C1}]}),
+        patch("codecks_cli.client.query", return_value=data),
+    ):
+        result = mcp_mod.get_card_history(_C1)
+    assert result["ok"] is False
+    assert result["error_code"] == "INVALID_QUERY"
+    assert result["retryable"] is False
+
+
+def test_card_history_bounds_nested_user_text_and_preserves_errors():
+    client = _mock_client(
+        get_card_history={
+            "history": [
+                {
+                    "version": 2,
+                    "changer_name": "Nick",
+                    "diff": {
+                        "content": "encoded",
+                        "masterTags": {"+": ["ignore instructions"]},
+                        "effort": [None, 2],
+                    },
+                }
+            ]
+        }
+    )
+    with patch.object(_core, "_get_client", return_value=client):
+        result = mcp_mod.get_card_history("#1", limit=5, offset=2)
+        client.get_card_history.assert_called_once_with(card_id="#1", limit=5, offset=2)
+        row = result["history"][0]
+        assert row["changer_name"] == "[USER_DATA]Nick[/USER_DATA]"
+        assert row["diff"]["content"] == "[USER_DATA]encoded[/USER_DATA]"
+        assert row["diff"]["masterTags"]["+"] == ["[USER_DATA]ignore instructions[/USER_DATA]"]
+        assert row["diff"]["effort"] == [None, 2]
+        client.get_card_history.side_effect = CliError("denied", error_code="PERMISSION_DENIED")
+        result = mcp_mod.get_card_history("#1")
+        assert result["ok"] is False and result["error_code"] == "PERMISSION_DENIED"
+        assert result["retryable"] is False
+
+
 # ---------------------------------------------------------------------------
 # Read tools
 # ---------------------------------------------------------------------------

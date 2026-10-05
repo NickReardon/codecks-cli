@@ -322,6 +322,91 @@ class CodecksClient:
         """Resolve UUIDs, #card numbers, and $Codecks references before card operations."""
         return resolve_card_ids(references)
 
+    def get_card_history(self, card_id: str, *, limit: int = 20, offset: int = 0) -> dict[str, Any]:
+        """Read newest-first version history, preserving Codecks' encoded text diffs."""
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise CliError(
+                "[ERROR] limit must be an integer from 1 to 100.", error_code="INVALID_INPUT"
+            )
+        if type(offset) is not int or not 0 <= offset <= 2**31 - 1:
+            raise CliError(
+                "[ERROR] offset must be a nonnegative int32.", error_code="INVALID_INPUT"
+            )
+        card_id = resolve_card_ids([card_id])["cards"][0]["id"]
+        relation = (
+            f"diffs({json.dumps({'$order': '-version', '$limit': limit + 1, '$offset': offset})})"
+        )
+        data = query(
+            {
+                f"card({json.dumps([card_id])})": [
+                    "version",
+                    {
+                        relation: [
+                            "version",
+                            "changerId",
+                            "versionCreatedAt",
+                            "diff",
+                            {"changer": ["name"]},
+                        ]
+                    },
+                ]
+            }
+        )
+        try:
+            card = data["card"][card_id]
+            history_ids = card[relation]
+            rows = data.get("cardHistory", data.get("card_history", {}))
+            users = data.get("user", {})
+            if (
+                type(card["version"]) is not int
+                or card["version"] < 0
+                or not isinstance(history_ids, list)
+                or not isinstance(rows, dict)
+                or not isinstance(users, dict)
+            ):
+                raise ValueError("Invalid history page")
+            history = []
+            for key in history_ids:
+                row = rows[key]
+                changer_id = _get_field(row, "changer_id", "changerId")
+                changed_at = _get_field(row, "version_created_at", "versionCreatedAt")
+                changer_name = users.get(changer_id, {}).get("name")
+                if (
+                    type(row["version"]) is not int
+                    or row["version"] < 0
+                    or not isinstance(row["diff"], dict)
+                    or not isinstance(changed_at, str)
+                    or not changed_at
+                    or (changer_id is not None and not isinstance(changer_id, str))
+                    or (changer_name is not None and not isinstance(changer_name, str))
+                ):
+                    raise ValueError("Invalid history row")
+                history.append(
+                    {
+                        "version": row["version"],
+                        "changer_id": changer_id,
+                        "changer_name": changer_name,
+                        "changed_at": changed_at,
+                        "diff": row["diff"],
+                    }
+                )
+        except (KeyError, TypeError, AttributeError, ValueError) as error:
+            raise CliError(
+                "[ERROR] Incomplete or invalid card history response.",
+                error_code="INVALID_QUERY",
+                retryable=False,
+            ) from error
+        has_more = len(history_ids) > limit
+        return {
+            "card_id": card_id,
+            "current_version": card["version"],
+            "history": history[:limit],
+            "limit": limit,
+            "offset": offset,
+            "has_more": has_more,
+            "next_offset": offset + limit if has_more else None,
+        }
+
     def get_journey(self, deck_id: str) -> dict[str, Any]:
         """Read native Journey steps and ordering; uses an internal API."""
         return journeys.get_journey(deck_id)

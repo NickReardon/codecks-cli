@@ -1,4 +1,4 @@
-"""Read tools: queries and dashboards (10 tools). Cache-aware."""
+"""Read tools: queries and dashboards (13 tools). Cache-aware except live history."""
 
 from datetime import UTC
 from typing import Literal
@@ -19,7 +19,7 @@ from codecks_cli.mcp_server._core import (
     _slim_deck,
     _validate_uuid,
 )
-from codecks_cli.mcp_server._security import _sanitize_activity, _sanitize_card
+from codecks_cli.mcp_server._security import _sanitize_activity, _sanitize_card, _tag_user_text
 
 
 def _try_cache(key: str) -> dict | list | None:  # type: ignore[type-arg]
@@ -435,6 +435,39 @@ def get_card(
     return _finalize_tool_result(result)
 
 
+def _tag_history_diff(value):
+    """Bound every string in a diff, including encoded content and removed text."""
+    if isinstance(value, str):
+        return _tag_user_text(value)
+    if isinstance(value, list):
+        return [_tag_history_diff(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _tag_history_diff(item) for key, item in value.items()}
+    return value
+
+
+def get_card_history(card_id: str, limit: int = 20, offset: int = 0) -> dict:
+    """Read newest-first card history directly from the API (preview).
+
+    Accepts a full UUID, #number or $reference, including archived/trashed cards.
+    limit is 1-100 (default 20); offset is nonnegative. Returns versions, changing
+    users, timestamps and diffs, plus has_more/next_offset. Text diffs retain the
+    API's encoding; user strings are bounded with USER_DATA markers. Pages can
+    shift when new edits occur. This tool does not write or use snapshot data.
+    """
+    result = _call("get_card_history", card_id=card_id, limit=limit, offset=offset)
+    if result.get("ok") is not False:
+        result["history"] = [
+            {
+                **row,
+                "changer_name": _tag_user_text(row.get("changer_name")),
+                "diff": _tag_history_diff(row["diff"]),
+            }
+            for row in result["history"]
+        ]
+    return _finalize_tool_result(result)
+
+
 def resolve_card_ids(references: list[str]) -> dict:
     """Translate #627 / $1uc / full UUIDs into verified API UUIDs (1-100 per call).
 
@@ -733,6 +766,7 @@ def register(mcp):
     mcp.tool()(get_account)
     mcp.tool()(list_cards)
     mcp.tool()(get_card)
+    mcp.tool()(get_card_history)
     mcp.tool()(resolve_card_ids)
     mcp.tool()(list_decks)
     mcp.tool()(list_projects)
