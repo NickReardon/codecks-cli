@@ -127,7 +127,12 @@ def create_tag(name: str, color: str | None = None, project: str | None = None) 
         api.dispatch("projects/addTag", payload)
         return {"ok": True, "tag_name": name, "source": "api"}
     except CliError as e:
-        return {"ok": False, "error": str(e)}
+        return {
+            "ok": False,
+            "error": str(e),
+            "error_code": e.error_code or "CLI_ERROR",
+            "retryable": e.retryable,
+        }
 
 
 def create_deck(name: str, project: str | None = None) -> dict[str, Any]:
@@ -195,7 +200,12 @@ def create_deck(name: str, project: str | None = None) -> dict[str, Any]:
             "source": "api",
         }
     except CliError as e:
-        return {"ok": False, "error": str(e)}
+        return {
+            "ok": False,
+            "error": str(e),
+            "error_code": e.error_code or "CLI_ERROR",
+            "retryable": e.retryable,
+        }
 
 
 VALID_MILESTONE_COLORS = {"gray", "brown", "yellow", "red", "pink", "blue", "green"}
@@ -264,7 +274,12 @@ def create_milestone(
             "source": "api",
         }
     except CliError as e:
-        return {"ok": False, "error": str(e)}
+        return {
+            "ok": False,
+            "error": str(e),
+            "error_code": e.error_code or "CLI_ERROR",
+            "retryable": e.retryable,
+        }
 
 
 def create_project(name: str) -> dict[str, Any]:
@@ -303,7 +318,12 @@ def create_project(name: str) -> dict[str, Any]:
             "source": "api",
         }
     except CliError as e:
-        return {"ok": False, "error": str(e)}
+        return {
+            "ok": False,
+            "error": str(e),
+            "error_code": e.error_code or "CLI_ERROR",
+            "retryable": e.retryable,
+        }
 
 
 def update_deck(deck_id: str, fields: dict[str, Any]) -> dict[str, Any]:
@@ -468,4 +488,9 @@ def archive_deck(deck_name: str, project: str | None = None) -> dict[str, Any]:
         api.dispatch("decks/delete", payload)
         return {"ok": True, "deck_name": deck_name, "source": "api"}
     except CliError as e:
-        return {"ok": False, "error": str(e)}
+        return {
+            "ok": False,
+            "error": str(e),
+            "error_code": e.error_code or "CLI_ERROR",
+            "retryable": e.retryable,
+        }

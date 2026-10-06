@@ -22,7 +22,16 @@ def _run_admin(func, *args, **kwargs):
     """Call a sync admin function (dispatch API) and return its result."""
     _ensure_cache_scope()
     config._cache.clear()
-    result = func(*args, **kwargs)
+    try:
+        result = func(*args, **kwargs)
+    except CliError as error:
+        return _finalize_tool_result(
+            _contract_error(
+                str(error),
+                retryable=error.retryable,
+                error_code=error.error_code or "CLI_ERROR",
+            )
+        )
     if result.get("ok"):
         _invalidate_cache()
         _persist_cache_to_disk()

@@ -17,6 +17,7 @@ from codecks_cli.exceptions import CliError, SetupError  # noqa: E402
 
 _core = importlib.import_module("codecks_cli.mcp_server._core")
 _tools_local = importlib.import_module("codecks_cli.mcp_server._tools_local")
+_tools_admin = importlib.import_module("codecks_cli.mcp_server._tools_admin")
 
 # Test UUIDs (36-char, 4 dashes — passes _validate_uuid)
 _C1 = "00000000-0000-0000-0000-000000000001"
@@ -39,6 +40,62 @@ def _mock_client(**method_returns):
     for name, val in method_returns.items():
         getattr(client, name).return_value = val
     return client
+
+
+def test_create_milestone_unknown_project_returns_lookup_error_without_dispatch():
+    with (
+        patch("codecks_cli.admin._get_account_id", return_value=_C1),
+        patch("codecks_cli.admin._get_user_id", return_value=_C2),
+        patch("codecks_cli.cards.list_projects", return_value={_C1: {"name": "Current Project"}}),
+        patch("codecks_cli.admin.api.dispatch") as dispatch,
+    ):
+        result = asyncio.run(_tools_admin.create_milestone("Test", project="Old Project"))
+    assert result["ok"] is False
+    assert result["error_code"] == "CLI_ERROR"
+    assert result["retryable"] is False
+    assert "Old Project" in result["error"] and "Current Project" in result["error"]
+    dispatch.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "method", ["create_project", "create_deck", "create_milestone", "create_tag", "archive_deck"]
+)
+def test_admin_wrappers_preserve_raised_error_contract(method):
+    with patch(
+        f"codecks_cli.admin.{method}",
+        side_effect=CliError("Temporarily unavailable", error_code="RATE_LIMITED", retryable=True),
+    ):
+        result = asyncio.run(getattr(_tools_admin, method)("Test"))
+    assert result["ok"] is False
+    assert result["error"] == "Temporarily unavailable"
+    assert result["error_code"] == "RATE_LIMITED"
+    assert result["retryable"] is True
+
+
+@pytest.mark.parametrize(
+    "method", ["create_project", "create_deck", "create_milestone", "create_tag", "archive_deck"]
+)
+@pytest.mark.parametrize(
+    "code,retryable", [("RATE_LIMITED", True), ("PERMISSION_DENIED", False), (None, False)]
+)
+def test_admin_dispatch_failures_preserve_error_contract(method, code, retryable):
+    with (
+        patch("codecks_cli.admin._get_account_id", return_value=_C1),
+        patch("codecks_cli.admin._get_user_id", return_value=_C2),
+        patch("codecks_cli.admin._resolve_project_id", return_value=_C1),
+        patch("codecks_cli.admin._resolve_deck_id", return_value=_C2),
+        patch("codecks_cli.cards.list_decks", return_value={"deck": {}}),
+        patch(
+            "codecks_cli.admin.api.dispatch",
+            side_effect=CliError("Dispatch failed", error_code=code, retryable=retryable),
+        ) as dispatch,
+    ):
+        result = asyncio.run(getattr(_tools_admin, method)("Test"))
+    dispatch.assert_called_once()
+    assert result["ok"] is False
+    assert result["error"] == "Dispatch failed"
+    assert result["error_code"] == (code or "CLI_ERROR")
+    assert result["retryable"] is retryable
 
 
 def test_update_deck_invalidates_and_preserves_error_contract():
