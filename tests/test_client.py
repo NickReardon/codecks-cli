@@ -67,17 +67,23 @@ def test_list_milestones_exposes_fresh_metadata():
         "color": "brown",
         "date": "2026-11-01",
         "start_date": None,
+        "is_global": False,
+        "project_ids": ["project"],
     }
     with patch("codecks_cli.client.list_milestones", return_value={"m": row}) as milestones:
         result = _client().list_milestones(include_metadata=True)
     milestones.assert_called_once_with(include_metadata=True)
     assert result[0]["start_date"] is None and result[0]["description"] == "Details"
+    assert result[0]["project_ids"] == ["project"] and result[0]["is_global"] is False
 
 
 def test_client_update_milestone_passes_fields():
     with patch("codecks_cli.admin.update_milestone", return_value={"ok": True}) as update:
         assert _client().update_milestone("id", fields={"description": ""})["ok"]
-        update.assert_called_once_with("id", {"description": ""})
+        update.assert_called_once_with("id", {"description": ""}, allow_project_removal=False)
+        update.reset_mock()
+        _client().update_milestone("id", fields={"projectIds": []}, allow_project_removal=True)
+        update.assert_called_once_with("id", {"projectIds": []}, allow_project_removal=True)
 
 
 def test_card_history_uses_live_ordered_pages_and_preserves_encoded_diffs():

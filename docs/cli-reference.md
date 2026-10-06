@@ -422,4 +422,4 @@ All methods use keyword-only arguments and return `dict[str, Any]`.
 
 For template editing, call `client.list_decks(include_card_counts=False, include_metadata=True)` to read fresh metadata and preserve existing defaults. Template writes verify the stored replacement before reporting success. `DECK_UPDATE_UNVERIFIED` requires checking state before retrying.
 
-`client.update_milestone(milestone_id, fields={...})` edits milestone metadata with verified read-back. `client.list_milestones(include_metadata=True)` reads fresh descriptions, colors and dates. See [milestone editing](mcp-reference.md#milestone-metadata-editing) for supported fields and clearing/error semantics.
+`client.update_milestone(milestone_id, fields={...}, allow_project_removal=False)` edits milestone metadata and project scope with verified read-back. `client.list_milestones(include_metadata=True)` reads fresh descriptions, colors, dates, `is_global`, and `project_ids`. Removing projects or narrowing global scope requires explicit acknowledgement. See [milestone editing](mcp-reference.md#milestone-metadata-editing) for supported fields and clearing/error semantics.

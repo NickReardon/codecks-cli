@@ -70,10 +70,13 @@ def test_milestone_metadata_bypasses_cache_and_does_not_hide_api_failure():
         "color": "blue",
         "date": "2026-10-05",
         "startDate": None,
+        "isGlobal": False,
+        "milestoneProjects": [],
     }
     with patch("codecks_cli.cards.query", return_value={"milestone": {"m1": fresh}}):
         assert cards_mod.list_milestones(include_metadata=True)["m1"]["start_date"] is None
     assert "old" not in config._cache["milestone_records"]
+    assert config._cache["milestone_records"]["m1"]["project_ids"] == []
     assert resolve_milestone_id("New") == "m1"
     with pytest.raises(CliError, match="not found"):
         resolve_milestone_id("Cached")
@@ -89,6 +92,48 @@ def test_milestone_empty_api_does_not_resurrect_local_names():
     config.env["CODECKS_MILESTONES"] = "m1=Deleted"
     with patch("codecks_cli.cards.query", return_value={}):
         assert cards_mod.list_milestones() == {}
+
+
+@pytest.mark.parametrize("snake", [False, True])
+def test_milestone_metadata_decodes_project_links(snake):
+    pid = "00000000-0000-0000-0000-000000000001"
+    row = {
+        "name": "Release",
+        "description": None,
+        "color": "blue",
+        "date": "2026-12-01",
+        "startDate": None,
+    }
+    row.update(
+        {
+            "is_global" if snake else "isGlobal": True,
+            "milestone_projects" if snake else "milestoneProjects": ["link"],
+        }
+    )
+    data = {
+        "milestone": {"m": row},
+        "milestoneProject": {"link": {"project_id" if snake else "projectId": pid}},
+    }
+    with patch("codecks_cli.cards.query", return_value=data):
+        result = cards_mod.list_milestones(include_metadata=True)["m"]
+    assert result["is_global"] is True and result["project_ids"] == [pid]
+
+
+@pytest.mark.parametrize(
+    "row,table",
+    [
+        ({}, {}),
+        ({"isGlobal": 1, "milestoneProjects": []}, {}),
+        ({"isGlobal": False, "milestoneProjects": ["missing"]}, {}),
+        ({"isGlobal": False, "milestoneProjects": [[]]}, {}),
+        ({"isGlobal": False, "milestoneProjects": ["link"]}, {"link": {"projectId": None}}),
+        ({"isGlobal": False, "milestoneProjects": ["link"]}, None),
+    ],
+)
+def test_milestone_scope_rejects_incomplete_api_records(row, table):
+    with pytest.raises(CliError) as error:
+        cards_mod._milestone_scope({"milestoneProject": table}, row)
+    assert error.value.error_code == "INVALID_QUERY"
 
 
 def test_ambiguous_milestone_names_are_rejected():

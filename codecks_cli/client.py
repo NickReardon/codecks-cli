@@ -641,7 +641,17 @@ class CodecksClient:
             )
             if include_metadata:
                 result[-1].update(
-                    {key: info[key] for key in ("description", "color", "date", "start_date")}
+                    {
+                        key: info[key]
+                        for key in (
+                            "description",
+                            "color",
+                            "date",
+                            "start_date",
+                            "is_global",
+                            "project_ids",
+                        )
+                    }
                 )
         return result
 
@@ -1494,11 +1504,15 @@ class CodecksClient:
 
         return admin.update_deck(deck_id, fields)
 
-    def update_milestone(self, milestone_id: str, *, fields: dict[str, Any]) -> dict[str, Any]:
-        """Edit name, description, color, date or startDate by UUID, with read-back."""
+    def update_milestone(
+        self, milestone_id: str, *, fields: dict[str, Any], allow_project_removal: bool = False
+    ) -> dict[str, Any]:
+        """Edit metadata/scope by UUID, verifying writes and guarding project removals."""
         from codecks_cli import admin
 
-        return admin.update_milestone(milestone_id, fields)
+        return admin.update_milestone(
+            milestone_id, fields, allow_project_removal=allow_project_removal
+        )
 
     def create_milestone(self, name: str, target_date: str | None = None) -> dict[str, Any]:
         """Create a release milestone.

@@ -142,7 +142,12 @@ def test_update_milestone_verified_fields_and_cache(fields):
         None,
         {},
         {"id": "other"},
+        {"projectIds": None},
         {"projectIds": []},
+        {"projectIds": "bad"},
+        {"projectIds": ["bad"]},
+        {"isGlobal": 1},
+        {"isGlobal": True, "projectIds": []},
         {"name": " "},
         {"name": True},
         {"description": None},
@@ -203,6 +208,98 @@ def _caching_list_decks(decks):
         return result
 
     return _call
+
+
+_MID = "00000000-0000-0000-0000-000000000001"
+_P1 = "00000000-0000-0000-0000-000000000002"
+_P2 = "00000000-0000-0000-0000-000000000003"
+
+
+def _scope_reply(projects, is_global=False):
+    links = [f"link-{i}" for i in range(len(projects))]
+    return {
+        "milestone": {
+            _MID: {"isDeleted": False, "isGlobal": is_global, "milestoneProjects": links}
+        },
+        "milestoneProject": {
+            link: {"projectId": pid} for link, pid in zip(links, projects, strict=True)
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "before,fields,after,ack",
+    [
+        (_scope_reply([_P1]), {"projectIds": [_P2, _P1]}, _scope_reply([_P1, _P2]), False),
+        (_scope_reply([_P1, _P2]), {"projectIds": [_P1]}, _scope_reply([_P1]), True),
+        (_scope_reply([_P1]), {"isGlobal": True}, _scope_reply([_P1, _P2], True), False),
+        (
+            _scope_reply([_P1, _P2], True),
+            {"isGlobal": False, "projectIds": [_P1]},
+            _scope_reply([_P1]),
+            True,
+        ),
+        (
+            _scope_reply([_P1, _P2], True),
+            {"projectIds": [_P1, _P2]},
+            _scope_reply([_P1, _P2]),
+            True,
+        ),
+        (_scope_reply([_P1]), {"isGlobal": False}, _scope_reply([_P1]), False),
+    ],
+)
+def test_milestone_scope_verified_and_invalidates_views(before, fields, after, ack):
+    config._cache.update({"milestone_records": {}, "decks": {}})
+    original = dict(fields)
+    with (
+        patch("codecks_cli.cards.list_projects", return_value={_P1: {}, _P2: {}}),
+        patch("codecks_cli.admin.api.query", side_effect=[before, after]),
+        patch("codecks_cli.admin.api.dispatch", return_value={}) as dispatch,
+    ):
+        assert update_milestone(_MID, fields, allow_project_removal=ack)["ok"]
+    dispatch.assert_called_once_with("milestones/update", {"id": _MID, **fields})
+    assert fields == original
+    assert "decks" not in config._cache and "milestone_records" not in config._cache
+
+
+@pytest.mark.parametrize(
+    "before,fields,code",
+    [
+        (_scope_reply([_P1, _P2]), {"projectIds": [_P1]}, "PROJECT_REMOVAL_REQUIRES_ACK"),
+        (_scope_reply([_P1]), {"projectIds": []}, "INVALID_INPUT"),
+        (_scope_reply([_P1], True), {"projectIds": [_P1]}, "PROJECT_REMOVAL_REQUIRES_ACK"),
+        (_scope_reply([_P1], True), {"isGlobal": False}, "INVALID_INPUT"),
+        (_scope_reply([_P1]), {"projectIds": [_P2]}, "INVALID_INPUT"),
+        (_scope_reply([_P1]), {"projectIds": [_P1, _P1]}, "INVALID_INPUT"),
+    ],
+)
+def test_milestone_scope_rejects_unsafe_changes_before_write(before, fields, code):
+    with (
+        patch("codecks_cli.cards.list_projects", return_value={_P1: {}}),
+        patch("codecks_cli.admin.api.query", return_value=before),
+        patch("codecks_cli.admin.api.dispatch") as dispatch,
+    ):
+        with pytest.raises(CliError) as error:
+            update_milestone(_MID, fields)
+    assert error.value.error_code == code and error.value.retryable is False
+    dispatch.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "after",
+    [_scope_reply([_P1], True), _scope_reply([_P2]), {"milestone": {_MID: {"isGlobal": False}}}],
+)
+def test_milestone_scope_mismatch_is_nonretryable_and_invalidates(after):
+    config._cache["decks"] = {}
+    with (
+        patch("codecks_cli.cards.list_projects", return_value={_P1: {}}),
+        patch("codecks_cli.admin.api.query", side_effect=[_scope_reply([_P1]), after]),
+        patch("codecks_cli.admin.api.dispatch", return_value={}),
+    ):
+        with pytest.raises(CliError) as error:
+            update_milestone(_MID, {"projectIds": [_P1]})
+    assert error.value.error_code == "MILESTONE_UPDATE_UNVERIFIED"
+    assert error.value.retryable is False and "decks" not in config._cache
 
 
 class TestCreateDeckExistingCheck:

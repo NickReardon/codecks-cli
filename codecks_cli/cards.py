@@ -8,6 +8,7 @@ import re
 import sys
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from codecks_cli import config
 from codecks_cli._utils import (  # noqa: F401 — re-exported for existing consumers
@@ -63,13 +64,46 @@ def load_project_names():
     return names
 
 
+def _milestone_scope(data, row):
+    """Decode a milestone's explicitly returned project-link relation."""
+    if not isinstance(data, dict) or not isinstance(row, dict):
+        raise CliError("Invalid milestone scope response", error_code="INVALID_QUERY")
+    is_global = _get_field(row, "is_global", "isGlobal")
+    links = _get_field(row, "milestone_projects", "milestoneProjects")
+    table = data.get("milestoneProject", {})
+    if type(is_global) is not bool or not isinstance(links, list):
+        raise CliError("Missing milestone scope", error_code="INVALID_QUERY")
+    if not isinstance(table, dict) or any(not isinstance(link, str) for link in links):
+        raise CliError("Invalid milestone project links", error_code="INVALID_QUERY")
+    projects = []
+    for link in links:
+        record = table.get(link, {})
+        if not isinstance(record, dict):
+            raise CliError("Invalid milestone project link", error_code="INVALID_QUERY")
+        project_id = _get_field(record, "project_id", "projectId")
+        try:
+            projects.append(str(uuid.UUID(project_id)))
+        except (ValueError, TypeError, AttributeError):
+            raise CliError("Invalid milestone project link", error_code="INVALID_QUERY") from None
+    if len(set(projects)) != len(projects):
+        raise CliError("Duplicate milestone project links", error_code="INVALID_QUERY")
+    return {"is_global": is_global, "project_ids": sorted(projects)}
+
+
 def _load_milestone_records(*, include_metadata=False):
     """API records own milestone identity; metadata reads always bypass the cache."""
     if not include_metadata and "milestone_records" in config._cache:
         return config._cache["milestone_records"]
-    fields = ["id", "name", "isDeleted"]
+    fields: list[Any] = ["id", "name", "isDeleted"]
     if include_metadata:
-        fields += ["description", "color", "date", "startDate"]
+        fields += [
+            "description",
+            "color",
+            "date",
+            "startDate",
+            "isGlobal",
+            {"milestoneProjects": ["projectId"]},
+        ]
     result = query({"_root": [{"account": [{"milestones": fields}]}]})
     rows = result.get("milestone", {})
     if not isinstance(rows, dict) or any(not isinstance(row, dict) for row in rows.values()):
@@ -81,6 +115,8 @@ def _load_milestone_records(*, include_metadata=False):
         for key, row in rows.items()
         if not _get_field(row, "is_deleted", "isDeleted")
     }
+    if include_metadata:
+        records = {mid: {**row, **_milestone_scope(result, row)} for mid, row in records.items()}
     config._cache["milestone_records"] = records
     return records
 
@@ -460,6 +496,7 @@ def list_milestones(*, include_metadata=False):
                     "Missing milestone start date", error_code="INVALID_QUERY", retryable=False
                 )
             info["start_date"] = _get_field(row, "start_date", "startDate")
+            info.update({key: row[key] for key in ("is_global", "project_ids")})
         output[mid] = info
     return output
 

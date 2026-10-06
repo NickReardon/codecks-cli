@@ -201,18 +201,31 @@ async def update_deck(deck_id: str, fields: dict) -> dict:
     return _finalize_tool_result(result)
 
 
-async def update_milestone(milestone_id: str, fields: dict) -> dict:
+async def update_milestone(
+    milestone_id: str, fields: dict, allow_project_removal: bool = False
+) -> dict:
     """Edit milestone name, description, color, date or startDate by full UUID.
 
     Omitted fields remain unchanged. description="" clears text; startDate=null
     clears the start date. Dates must be YYYY-MM-DD. Colors: gray, brown, yellow,
     red, pink, blue, green. Reads back all submitted fields before success.
     MILESTONE_UPDATE_UNVERIFIED means inspect fresh metadata before retrying.
+    isGlobal=true enables all projects; a nonempty projectIds replaces the project list
+    and makes the milestone non-global. Do not combine both. Removing projects
+    also removes their card/deck associations and requires allow_project_removal=true.
+    A global-to-local transition always requires this acknowledgement.
     """
     result = await asyncio.to_thread(
-        _call, "update_milestone", milestone_id=milestone_id, fields=fields
+        _call,
+        "update_milestone",
+        milestone_id=milestone_id,
+        fields=fields,
+        allow_project_removal=allow_project_removal,
     )
-    if result.get("ok") is False and result.get("error_code") != "INVALID_INPUT":
+    if result.get("ok") is False and result.get("error_code") not in (
+        "INVALID_INPUT",
+        "PROJECT_REMOVAL_REQUIRES_ACK",
+    ):
         _invalidate_cache()
         _persist_cache_to_disk()
     return _finalize_tool_result(result)

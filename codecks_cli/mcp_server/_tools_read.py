@@ -518,7 +518,7 @@ def list_projects(include_archived: bool = False) -> dict:
 def list_milestones(include_metadata: bool = False) -> dict:
     """List API milestones. include_metadata reads fresh descriptions, colors and dates.
 
-    Metadata includes nullable start_date. Names and descriptions in metadata
+    Metadata includes nullable start_date, is_global and project_ids. Names and descriptions in metadata
     carry USER_DATA boundaries; remove wrappers before resubmitting text.
     """
     result = (

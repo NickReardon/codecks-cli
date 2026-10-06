@@ -162,7 +162,7 @@ def test_update_milestone_invalidates_and_preserves_unverified_error():
         with patch("codecks_cli.mcp_server._core._write_through_cache") as invalidate:
             assert asyncio.run(mcp_mod.update_milestone(_C1, {"name": "Release"}))["ok"]
             client.update_milestone.assert_called_once_with(
-                milestone_id=_C1, fields={"name": "Release"}
+                milestone_id=_C1, fields={"name": "Release"}, allow_project_removal=False
             )
             invalidate.assert_called_once()
         client.update_milestone.side_effect = CliError(
@@ -178,6 +178,32 @@ def test_update_milestone_invalidates_and_preserves_unverified_error():
                 and result["retryable"] is False
             )
             invalidate.assert_called_once()
+
+
+def test_mcp_milestone_scope_acknowledgement_is_forwarded():
+    with patch("codecks_cli.mcp_server._tools_admin._call", return_value={"ok": True}) as call:
+        assert asyncio.run(
+            mcp_mod.update_milestone(_C1, {"projectIds": []}, allow_project_removal=True)
+        )["ok"]
+    call.assert_called_once_with(
+        "update_milestone", milestone_id=_C1, fields={"projectIds": []}, allow_project_removal=True
+    )
+
+
+@pytest.mark.parametrize("code", ["INVALID_INPUT", "PROJECT_REMOVAL_REQUIRES_ACK"])
+def test_milestone_predispatch_rejection_preserves_caches(code):
+    with (
+        patch(
+            "codecks_cli.mcp_server._tools_admin._call",
+            return_value={"ok": False, "error_code": code, "retryable": False},
+        ),
+        patch("codecks_cli.mcp_server._tools_admin._invalidate_cache") as invalidate,
+        patch("codecks_cli.mcp_server._tools_admin._persist_cache_to_disk") as persist,
+    ):
+        result = asyncio.run(mcp_mod.update_milestone(_C1, {"projectIds": [_C2]}))
+    assert result["error_code"] == code and result["retryable"] is False
+    invalidate.assert_not_called()
+    persist.assert_not_called()
 
 
 @pytest.mark.parametrize(

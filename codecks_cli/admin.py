@@ -403,16 +403,73 @@ def update_deck(deck_id: str, fields: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "deck_id": deck_id.lower(), "updated_fields": list(fields), "source": "api"}
 
 
-def update_milestone(milestone_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+def _prepare_milestone_scope(milestone_id, fields, allow_project_removal):
+    from codecks_cli.cards import _milestone_scope, list_projects
+
+    if "isGlobal" in fields and type(fields["isGlobal"]) is not bool:
+        raise CliError("isGlobal must be a boolean", error_code="INVALID_INPUT")
+    if fields.get("isGlobal") is True and "projectIds" in fields:
+        raise CliError("Do not combine isGlobal=true with projectIds", error_code="INVALID_INPUT")
+    if "projectIds" in fields:
+        project_ids = fields["projectIds"]
+        if not isinstance(project_ids, list) or not project_ids:
+            raise CliError(
+                "projectIds must be a nonempty array of UUIDs", error_code="INVALID_INPUT"
+            )
+        project_ids = [_validate_admin_uuid(pid, "projectIds") for pid in project_ids]
+        if len(set(project_ids)) != len(project_ids):
+            raise CliError("projectIds must be unique", error_code="INVALID_INPUT")
+        fields["projectIds"] = project_ids
+        if project_ids and not set(project_ids) <= set(list_projects(include_archived=True)):
+            raise CliError(
+                "projectIds must belong to accessible account projects", error_code="INVALID_INPUT"
+            )
+    data = api.query(
+        {
+            f"milestone({json.dumps([milestone_id])})": [
+                "isDeleted",
+                "isGlobal",
+                {"milestoneProjects": ["projectId"]},
+            ]
+        }
+    )
+    row = data.get("milestone", {}).get(milestone_id, {})
+    if _get_field(row, "is_deleted", "isDeleted") is not False:
+        raise CliError("Milestone must exist and be active", error_code="INVALID_INPUT")
+    current = _milestone_scope(data, row)
+    if fields.get("isGlobal") is True:
+        return {"is_global": True}
+    if current["is_global"] and "projectIds" not in fields:
+        raise CliError(
+            "A global milestone needs projectIds when made non-global", error_code="INVALID_INPUT"
+        )
+    desired = fields.get("projectIds", current["project_ids"])
+    removed = set(current["project_ids"]) - set(desired)
+    if (current["is_global"] or removed) and not allow_project_removal:
+        raise CliError(
+            "This narrows milestone scope and can remove card/deck associations. "
+            "Inspect fresh metadata, then set allow_project_removal=true to acknowledge. "
+            f"Removed project IDs: {sorted(removed)}",
+            error_code="PROJECT_REMOVAL_REQUIRES_ACK",
+        )
+    return {"is_global": False, "project_ids": sorted(desired)}
+
+
+def update_milestone(
+    milestone_id: str, fields: dict[str, Any], *, allow_project_removal: bool = False
+) -> dict[str, Any]:
     """Edit milestone metadata and verify every submitted field."""
     milestone_id = _validate_admin_uuid(milestone_id, "milestone_id")
-    allowed = {"name", "description", "color", "date", "startDate"}
+    allowed = {"name", "description", "color", "date", "startDate", "isGlobal", "projectIds"}
     if not isinstance(fields, dict) or not fields or fields.keys() - allowed:
         raise CliError(
-            "Provide a nonempty object with name, description, color, date or startDate",
+            "Provide a nonempty object with name, description, color, date, startDate, isGlobal or projectIds",
             error_code="INVALID_INPUT",
             retryable=False,
         )
+    if type(allow_project_removal) is not bool:
+        raise CliError("allow_project_removal must be a boolean", error_code="INVALID_INPUT")
+    fields = dict(fields)
     for key, maximum in (("name", 500), ("description", 10000)):
         if key in fields and (
             not isinstance(fields[key], str)
@@ -441,17 +498,33 @@ def update_milestone(milestone_id: str, fields: dict[str, Any]) -> dict[str, Any
                 error_code="INVALID_INPUT",
                 retryable=False,
             ) from None
+    scope = (
+        _prepare_milestone_scope(milestone_id, fields, allow_project_removal)
+        if fields.keys() & {"isGlobal", "projectIds"}
+        else None
+    )
+    read_fields: list[Any] = [key for key in fields if key not in {"isGlobal", "projectIds"}]
+    if scope is not None:
+        read_fields += ["isGlobal", {"milestoneProjects": ["projectId"]}]
     try:
         api.dispatch("milestones/update", {"id": milestone_id, **fields})
         try:
-            data = api.query({f"milestone({json.dumps([milestone_id])})": list(fields)})
+            data = api.query({f"milestone({json.dumps([milestone_id])})": read_fields})
             row = data.get("milestone", {}).get(milestone_id, {})
             if isinstance(row, dict) and "start_date" in row:
                 row = {**row, "startDate": row["start_date"]}
             if not isinstance(row, dict) or any(
-                key not in row or row[key] != value for key, value in fields.items()
+                key not in row or row[key] != value
+                for key, value in fields.items()
+                if key not in {"isGlobal", "projectIds"}
             ):
                 raise CliError("Milestone read-back does not match the requested fields")
+            if scope is not None:
+                from codecks_cli.cards import _milestone_scope
+
+                actual_scope = _milestone_scope(data, row)
+                if any(actual_scope[key] != value for key, value in scope.items()):
+                    raise CliError("Milestone scope read-back does not match")
         except (CliError, AttributeError, TypeError) as error:
             raise CliError(
                 "Milestone update was submitted but could not be verified. Read its metadata before retrying.",
@@ -460,6 +533,8 @@ def update_milestone(milestone_id: str, fields: dict[str, Any]) -> dict[str, Any
             ) from error
     finally:
         config._cache.pop("milestone_records", None)
+        if scope is not None:
+            config._cache.pop("decks", None)
     return {
         "ok": True,
         "milestone_id": milestone_id,
