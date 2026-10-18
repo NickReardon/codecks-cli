@@ -6,6 +6,7 @@ token may reject them; errors propagate without falling back to browser auth.
 
 import json
 import threading
+from _thread import LockType
 from uuid import UUID
 from weakref import WeakValueDictionary
 
@@ -15,7 +16,7 @@ from codecks_cli.card_refs import resolve_card_ids
 from codecks_cli.cards import _get_user_id, get_account
 from codecks_cli.exceptions import CliError
 
-_start_locks = WeakValueDictionary()
+_start_locks: WeakValueDictionary[str, LockType] = WeakValueDictionary()
 _start_locks_guard = threading.Lock()
 _pending_starts: dict[str, set[str]] = {}
 
