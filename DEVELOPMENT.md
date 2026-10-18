@@ -82,7 +82,7 @@ codecks_cli/
   scaffolding.py        <- scaffold_feature(), split_features()
   cards.py              <- Card CRUD, hand, conversations
   card_refs.py          <- Exact #number / $reference to UUID lookup
-  journeys.py           <- Experimental native Journey operations (internal API)
+  journeys.py           <- Experimental native Journey operations via shared API dispatch
   api.py                <- HTTP layer (retries, timeouts, tokens)
   config.py             <- .env loading, constants, VERSION
   exceptions.py         <- CliError, SetupError, HTTPError
@@ -174,7 +174,7 @@ py -m pytest --tb=short                # shorter tracebacks
 | `test_commands.py` | Command handlers (cmd_*) |
 | `test_client.py` | CodecksClient methods |
 | `test_card_refs.py` | Exact card references and native short-code encoding |
-| `test_journeys.py` | Native Journey payloads, validation, errors, and MCP safety |
+| `test_journeys.py` | Native Journey payloads, strict dispatch validation, errors, and MCP safety |
 | `test_cards.py` | Card CRUD operations |
 | `test_api.py` | HTTP layer, retries, tokens |
 | `test_config.py` | Configuration loading |

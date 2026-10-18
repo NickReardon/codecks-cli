@@ -77,6 +77,8 @@ Codecks' documented API stability contract. Scoped API tokens may reject them
 even with Producer permission. Such denials propagate through the normal error
 contract; there is no legacy browser-auth fallback. Reads return only active
 steps. Beginning-of-zone moves anchor before the first unmoved active step.
+Writes use the shared dispatch helper, including object-response validation
+and strict-mode acknowledgement checks (`actionId`, `ok`, or `payload`).
 Starting a Journey sends explicit active step IDs and skips steps already
 represented by child cards. Starts on the same parent are serialized within one
 process and the resulting children are verified after creation. An uncertain

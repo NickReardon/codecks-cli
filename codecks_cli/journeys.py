@@ -10,8 +10,9 @@ from _thread import LockType
 from uuid import UUID
 from weakref import WeakValueDictionary
 
+from codecks_cli import api
 from codecks_cli._utils import _get_field
-from codecks_cli.api import query, session_request
+from codecks_cli.api import query
 from codecks_cli.card_refs import resolve_card_ids
 from codecks_cli.cards import _get_user_id, get_account
 from codecks_cli.exceptions import CliError
@@ -68,7 +69,7 @@ def _fields(fields: dict | None) -> dict:
 
 
 def _dispatch(action: str, data: dict) -> dict:
-    response = session_request(f"/dispatch/workflows/{action}", data)
+    response = api.dispatch(f"workflows/{action}", data)
     return {"ok": True, "response": response}
 
 
@@ -197,7 +198,7 @@ def start_journey(card_id: str) -> dict:
     card_id = resolved["id"]
     if resolved.get("visibility", "default") != "default":
         raise CliError("[ERROR] Journey parent must be an active card.", error_code="INVALID_INPUT")
-    # ponytail: process-local protection; server idempotency is needed across processes/restarts.
+    # shortcut: process-local protection, use server idempotency to cover processes/restarts.
     with _start_locks_guard:
         lock = _start_locks.setdefault(card_id, threading.Lock())
     with lock:

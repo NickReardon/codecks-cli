@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from codecks_cli import journeys
+from codecks_cli import config, journeys
 from codecks_cli.client import CodecksClient
 from codecks_cli.exceptions import CliError
 
@@ -48,9 +48,7 @@ def test_read_uses_compound_deck_id_and_preserves_step_order():
 def test_create_update_order_use_native_endpoints_and_preserve_null_clears():
     client = CodecksClient(validate_token=False)
     with (
-        patch(
-            "codecks_cli.journeys.session_request", return_value={"actionId": "action"}
-        ) as request,
+        patch("codecks_cli.api.session_request", return_value={"actionId": "action"}) as request,
         patch(
             "codecks_cli.journeys.get_journey",
             return_value={"steps": [{"id": STEP, "label": "Produce"}]},
@@ -97,18 +95,48 @@ def test_create_update_order_use_native_endpoints_and_preserve_null_clears():
     ],
 )
 def test_invalid_update_never_dispatches(fields):
-    with patch("codecks_cli.journeys.session_request") as request:
+    with patch("codecks_cli.api.session_request") as request:
         with pytest.raises(CliError) as error:
             journeys.update_journey_step(STEP, fields)
         assert error.value.error_code == "INVALID_INPUT"
         request.assert_not_called()
 
 
+@pytest.mark.parametrize("response", [None, [], "ok"])
+def test_journey_write_rejects_nonobject_dispatch_responses(response):
+    with patch("codecks_cli.api.session_request", return_value=response) as request:
+        with pytest.raises(CliError, match="expected JSON object"):
+            journeys.update_journey_step(STEP, {"content": "Concept"})
+    request.assert_called_once_with(
+        "/dispatch/workflows/updateItem", {"itemId": STEP, "content": "Concept"}
+    )
+
+
+@pytest.mark.parametrize("response", [{}, {"workflowItem": {STEP: {}}}])
+def test_strict_journey_write_requires_shared_dispatch_acknowledgement(monkeypatch, response):
+    monkeypatch.setattr(config, "RUNTIME_STRICT", True)
+    with patch("codecks_cli.api.session_request", return_value=response) as request:
+        with pytest.raises(CliError, match="missing expected ack fields") as error:
+            journeys.update_journey_step(STEP, {"content": "Concept"})
+    assert error.value.retryable is False
+    request.assert_called_once()
+
+
+@pytest.mark.parametrize("response", [{"actionId": "action"}, {"ok": True}, {"payload": {}}])
+def test_strict_journey_write_preserves_shared_dispatch_acknowledgement(monkeypatch, response):
+    monkeypatch.setattr(config, "RUNTIME_STRICT", True)
+    with patch("codecks_cli.api.session_request", return_value=response):
+        assert journeys.update_journey_step(STEP, {"content": "Concept"}) == {
+            "ok": True,
+            "response": response,
+        }
+
+
 @pytest.mark.parametrize(
     "items,target", [([], None), ([STEP, STEP], None), ([STEP], STEP), (["bad"], None)]
 )
 def test_invalid_order_never_dispatches(items, target):
-    with patch("codecks_cli.journeys.session_request") as request:
+    with patch("codecks_cli.api.session_request") as request:
         with pytest.raises(CliError):
             journeys.order_journey_steps(DECK, items, target, None)
         request.assert_not_called()
@@ -125,7 +153,7 @@ def test_start_resolves_card_reference_before_applying_and_does_not_retry_write(
             "codecks_cli.journeys._read_journey_parent", side_effect=[(DECK, set()), (DECK, {STEP})]
         ),
         patch("codecks_cli.journeys.get_journey", return_value={"steps": [{"id": STEP}]}),
-        patch("codecks_cli.journeys.session_request", return_value={}) as request,
+        patch("codecks_cli.api.session_request", return_value={}) as request,
     ):
         assert journeys.start_journey("$1uc")["ok"]
     resolve.assert_called_once_with(["$1uc"])
@@ -156,7 +184,7 @@ def test_move_to_beginning_anchors_before_first_unmoved_step_in_zone():
     ]
     with (
         patch("codecks_cli.journeys.get_journey", return_value={"steps": steps}),
-        patch("codecks_cli.journeys.session_request", return_value={}) as request,
+        patch("codecks_cli.api.session_request", return_value={}) as request,
     ):
         journeys.order_journey_steps(DECK, [STEP], None, "Produce")
     request.assert_called_once_with(
@@ -168,7 +196,7 @@ def test_move_to_beginning_anchors_before_first_unmoved_step_in_zone():
 def test_order_rejects_steps_from_another_deck_before_write():
     with (
         patch("codecks_cli.journeys.get_journey", return_value={"steps": []}),
-        patch("codecks_cli.journeys.session_request") as request,
+        patch("codecks_cli.api.session_request") as request,
     ):
         with pytest.raises(CliError, match="this deck"):
             journeys.order_journey_steps(DECK, [STEP], None, None)
@@ -201,7 +229,7 @@ def test_concurrent_starts_re_read_inside_parent_lock():
         patch("codecks_cli.journeys.get_journey", return_value={"steps": [{"id": STEP}]}),
         patch("codecks_cli.journeys._get_user_id", return_value=USER),
         patch("codecks_cli.journeys.get_account", return_value={"account": {ACCOUNT: {}}}),
-        patch("codecks_cli.journeys.session_request", side_effect=dispatch) as request,
+        patch("codecks_cli.api.session_request", side_effect=dispatch) as request,
         ThreadPoolExecutor(max_workers=2) as pool,
     ):
         first = pool.submit(journeys.start_journey, CARD)
@@ -217,8 +245,11 @@ def test_concurrent_starts_re_read_inside_parent_lock():
     request.assert_called_once()
 
 
-@pytest.mark.parametrize("failure", ["timeout", "verification_read", "missing_children"])
-def test_uncertain_start_blocks_writes_until_submitted_steps_are_visible(failure):
+@pytest.mark.parametrize(
+    "failure", ["timeout", "verification_read", "missing_children", "strict_response"]
+)
+def test_uncertain_start_blocks_writes_until_submitted_steps_are_visible(monkeypatch, failure):
+    monkeypatch.setattr(config, "RUNTIME_STRICT", failure == "strict_response")
     applied = set()
     read_count = 0
 
@@ -235,7 +266,7 @@ def test_uncertain_start_blocks_writes_until_submitted_steps_are_visible(failure
         patch("codecks_cli.journeys.get_journey", return_value={"steps": [{"id": STEP}]}),
         patch("codecks_cli.journeys._get_user_id", return_value=USER),
         patch("codecks_cli.journeys.get_account", return_value={"account": {ACCOUNT: {}}}),
-        patch("codecks_cli.journeys.session_request", return_value={}) as request,
+        patch("codecks_cli.api.session_request", return_value={}) as request,
     ):
         if failure == "timeout":
             request.side_effect = CliError("timed out", error_code="NETWORK_ERROR")
@@ -262,7 +293,7 @@ def test_start_skips_previously_applied_steps_and_is_noop_when_complete():
         patch("codecks_cli.journeys.resolve_card_ids", return_value={"cards": [{"id": CARD}]}),
         patch("codecks_cli.journeys.query", return_value=data),
         patch("codecks_cli.journeys.get_journey", return_value={"steps": [{"id": STEP}]}),
-        patch("codecks_cli.journeys.session_request") as request,
+        patch("codecks_cli.api.session_request") as request,
     ):
         assert journeys.start_journey(CARD)["created"] == 0
     request.assert_not_called()
@@ -274,7 +305,7 @@ def test_mcp_denial_preserves_scope_error_without_falling_back():
     with (
         patch.object(_core, "_get_client", return_value=CodecksClient(validate_token=False)),
         patch(
-            "codecks_cli.journeys.session_request",
+            "codecks_cli.api.session_request",
             side_effect=CliError("requires workflowTemplate:write", error_code="PERMISSION_DENIED"),
         ) as request,
     ):
@@ -290,7 +321,7 @@ def test_successful_journey_write_invalidates_card_snapshot():
     _core._snapshot_cache = {"cards_result": {"cards": []}}
     with (
         patch.object(_core, "_get_client", return_value=CodecksClient(validate_token=False)),
-        patch("codecks_cli.journeys.session_request", return_value={}),
+        patch("codecks_cli.api.session_request", return_value={}),
     ):
         assert update_journey_step(STEP, {"content": "Concept"})["ok"]
     assert "cards_result" not in _core._snapshot_cache
@@ -338,7 +369,7 @@ def test_mcp_write_tags_nested_dispatch_content():
     with (
         patch.object(_core, "_get_client", return_value=CodecksClient(validate_token=False)),
         patch(
-            "codecks_cli.journeys.session_request",
+            "codecks_cli.api.session_request",
             return_value={"workflowItem": {STEP: {"content": "Concept", "label": "Produce"}}},
         ),
     ):

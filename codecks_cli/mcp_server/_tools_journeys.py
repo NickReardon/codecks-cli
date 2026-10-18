@@ -99,6 +99,7 @@ def start_journey(card_id: str) -> dict:
     this process and verified after creation. An uncertain write is not retried;
     further starts wait until its submitted steps are visible. Protection does
     not survive process restarts or coordinate other processes.
+    Do not blindly retry after an error or timeout: the server can create duplicate tasks.
     """
     return _finish_write(_call("start_journey", card_id=card_id))
 
