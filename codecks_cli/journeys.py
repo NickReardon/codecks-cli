@@ -198,7 +198,7 @@ def start_journey(card_id: str) -> dict:
     card_id = resolved["id"]
     if resolved.get("visibility", "default") != "default":
         raise CliError("[ERROR] Journey parent must be an active card.", error_code="INVALID_INPUT")
-    # shortcut: process-local protection, use server idempotency to cover processes/restarts.
+    # shortcut: process-local protection, covering processes/restarts needs confirmed server idempotency.
     with _start_locks_guard:
         lock = _start_locks.setdefault(card_id, threading.Lock())
     with lock:

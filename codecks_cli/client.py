@@ -343,7 +343,11 @@ class CodecksClient:
         return journeys.order_journey_steps(deck_id, item_ids, target_id, label)
 
     def start_journey(self, card_id: str) -> dict[str, Any]:
-        """Apply a native Journey to a card UUID, #number, or $reference."""
+        """Apply a native Journey to a card UUID, #number, or $reference.
+
+        Protection is process-local and lost on restart. Reconcile the parent's
+        children before retrying an uncertain write to avoid duplicate tasks.
+        """
         return journeys.start_journey(card_id)
 
     def get_card(

@@ -85,8 +85,10 @@ process and the resulting children are verified after creation. An uncertain
 write returns non-retryable `JOURNEY_OUTCOME_UNKNOWN`; further starts on that
 parent only submit after all previously submitted steps are visible. Reconcile
 the parent's children before retrying. This protection is process-local and is
-lost on restart. Codecks' apply endpoint creates duplicates on request replay,
-including when the same request ID and idempotency key are reused.
+lost on restart. Concurrent processes or stale child reads after restart can
+create duplicate tasks. No supported server-side idempotency contract has been
+confirmed for this action. Do not assume that supplying a request ID or a guessed
+idempotency key prevents duplicates.
 
 ## Prompt Surface
 
