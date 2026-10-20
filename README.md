@@ -1,9 +1,8 @@
 # codecks-cli
 
-MCP card references can be resolved with `resolve_card_ids(["#627", "$1uc"])`,
-then used as UUIDs with the existing card tools. Native Journey tools are also
-available experimentally. See [the MCP reference](docs/mcp-reference.md) for
-their internal-API limitations and validation status.
+Native Journey tools are available experimentally. See
+[the MCP reference](docs/mcp-reference.md) for their internal-API limitations
+and validation status.
 
 ![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-blue)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green)
