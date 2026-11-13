@@ -417,3 +417,223 @@ class TestMilestoneCreator:
         with patch("codecks_cli.config.save_env_value"):
             create_milestone("M1")
         assert mock_dispatch.call_args.args[1]["userId"] == "me-id"
+
+
+_DECK = "00000000-0000-0000-0000-000000000001"
+_MILESTONE = "00000000-0000-0000-0000-000000000002"
+_PROJECT = "00000000-0000-0000-0000-000000000003"
+_OTHER = "00000000-0000-0000-0000-000000000004"
+
+
+def _deck_state(milestone, total, counts, **extras):
+    import json
+
+    row = {
+        "milestoneId": milestone,
+        "projectId": _PROJECT,
+        "isDeleted": False,
+        'count:cards({"visibility": "default"})': total,
+        **extras,
+    }
+    for mid, count in counts.items():
+        row["count:cards(" + json.dumps({"visibility": "default", "milestoneId": mid}) + ")"] = (
+            count
+        )
+    return {"deck": {_DECK: row}}
+
+
+def _milestone_state(*, project=_PROJECT, global_scope=False):
+    return {
+        "milestone": {
+            _MILESTONE: {
+                "isDeleted": False,
+                "isGlobal": global_scope,
+                "milestoneProjects": ["link"],
+            }
+        },
+        "milestoneProject": {"link": {"projectId": project}},
+    }
+
+
+def test_deck_milestone_reports_affected_cards_without_writing():
+    with (
+        patch(
+            "codecks_cli.admin.api.query",
+            side_effect=[_deck_state(None, 4, {None: 2, _MILESTONE: 1}), _milestone_state()],
+        ),
+        patch("codecks_cli.admin.api.dispatch") as dispatch,
+    ):
+        with pytest.raises(CliError) as error:
+            update_deck(_DECK, {"milestoneId": _MILESTONE})
+        assert error.value.error_code == "DECK_MILESTONE_REQUIRES_ACK"
+        assert "3 active card(s)" in str(error.value)
+        assert error.value.retryable is False
+        dispatch.assert_not_called()
+
+
+@pytest.mark.parametrize("global_scope", [False, True])
+def test_deck_milestone_assigns_and_verifies_all_active_cards(global_scope):
+    fields = {"milestoneId": _MILESTONE, "defaultCard": {}, "title": "New"}
+    with (
+        patch(
+            "codecks_cli.admin.api.query",
+            side_effect=[
+                _deck_state(None, 4, {None: 2, _MILESTONE: 1}),
+                _milestone_state(
+                    project=_OTHER if global_scope else _PROJECT, global_scope=global_scope
+                ),
+                _deck_state(_MILESTONE, 4, {None: 0, _MILESTONE: 4}, defaultCard={}, title="New"),
+            ],
+        ),
+        patch("codecks_cli.admin.api.dispatch", return_value={}) as dispatch,
+    ):
+        result = update_deck(_DECK, fields, allow_card_changes=True)
+        assert result["ok"] and result["affected_card_count"] == 3
+        dispatch.assert_called_once_with("decks/update", {"id": _DECK, **fields})
+
+
+def test_deck_milestone_clear_preserves_other_milestone_cards():
+    with (
+        patch(
+            "codecks_cli.admin.api.query",
+            side_effect=[
+                _deck_state(_MILESTONE, 4, {None: 1}),
+                _deck_state(_MILESTONE, 4, {None: 1, _MILESTONE: 2}),
+                _deck_state(None, 4, {None: 3, _MILESTONE: 0}),
+            ],
+        ),
+        patch("codecks_cli.admin.api.dispatch", return_value={}) as dispatch,
+    ):
+        result = update_deck(_DECK, {"milestoneId": None}, allow_card_changes=True)
+        assert result["ok"] and result["affected_card_count"] == 2
+        dispatch.assert_called_once_with("decks/update", {"id": _DECK, "milestoneId": None})
+
+
+@pytest.mark.parametrize("target", [None, _MILESTONE])
+def test_deck_milestone_no_affected_cards_needs_no_ack(target):
+    counts = {None: 2 if target is None else 0, target: 2}
+    replies = [_deck_state(target, 2, counts)]
+    if target:
+        replies.append(_milestone_state())
+    replies.append(_deck_state(target, 2, counts))
+    with (
+        patch("codecks_cli.admin.api.query", side_effect=replies),
+        patch("codecks_cli.admin.api.dispatch", return_value={}),
+    ):
+        result = update_deck(_DECK, {"milestoneId": target})
+        assert result["ok"] and result["affected_card_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {},
+        _deck_state(None, 2, {None: 1}),
+        _deck_state(None, 2, {None: 1, _MILESTONE: True}),
+        _deck_state(None, 2, {None: 1, _MILESTONE: 3}),
+        _deck_state(None, 2, {None: 1, _MILESTONE: -1}),
+    ],
+)
+def test_deck_milestone_incomplete_counts_block_write(response):
+    with (
+        patch("codecks_cli.admin.api.query", return_value=response),
+        patch("codecks_cli.admin.api.dispatch") as dispatch,
+    ):
+        with pytest.raises(CliError) as error:
+            update_deck(_DECK, {"milestoneId": _MILESTONE}, allow_card_changes=True)
+        assert error.value.error_code == "INVALID_QUERY"
+        dispatch.assert_not_called()
+
+
+def test_deck_milestone_wrong_project_blocks_write():
+    with (
+        patch(
+            "codecks_cli.admin.api.query",
+            side_effect=[
+                _deck_state(None, 1, {None: 1, _MILESTONE: 0}),
+                _milestone_state(project=_OTHER),
+            ],
+        ),
+        patch("codecks_cli.admin.api.dispatch") as dispatch,
+    ):
+        with pytest.raises(CliError) as error:
+            update_deck(_DECK, {"milestoneId": _MILESTONE}, allow_card_changes=True)
+        assert error.value.error_code == "INVALID_INPUT"
+        dispatch.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "after",
+    [
+        _deck_state(None, 2, {None: 0, _MILESTONE: 2}),
+        _deck_state(_MILESTONE, 2, {None: 1, _MILESTONE: 1}),
+        _deck_state(_MILESTONE, 3, {None: 0, _MILESTONE: 3}),
+        {},
+        CliError("network", error_code="NETWORK_ERROR", retryable=True),
+    ],
+)
+def test_deck_milestone_unverified_assignment_never_reports_success(after):
+    with (
+        patch(
+            "codecks_cli.admin.api.query",
+            side_effect=[_deck_state(None, 2, {None: 2, _MILESTONE: 0}), _milestone_state(), after],
+        ),
+        patch("codecks_cli.admin.api.dispatch", return_value={}),
+    ):
+        config._cache["decks"] = {}
+        with pytest.raises(CliError) as error:
+            update_deck(_DECK, {"milestoneId": _MILESTONE}, allow_card_changes=True)
+        assert error.value.error_code == "DECK_UPDATE_UNVERIFIED"
+        assert error.value.retryable is False
+        assert "decks" not in config._cache
+
+
+@pytest.mark.parametrize(
+    "after",
+    [
+        _deck_state(None, 4, {None: 4, _MILESTONE: 0}),
+        _deck_state(None, 4, {None: 2, _MILESTONE: 1}),
+    ],
+)
+def test_deck_milestone_clear_verifies_card_counts(after):
+    with (
+        patch(
+            "codecks_cli.admin.api.query",
+            side_effect=[
+                _deck_state(_MILESTONE, 4, {None: 1}),
+                _deck_state(_MILESTONE, 4, {None: 1, _MILESTONE: 2}),
+                after,
+            ],
+        ),
+        patch("codecks_cli.admin.api.dispatch", return_value={}),
+    ):
+        with pytest.raises(CliError) as error:
+            update_deck(_DECK, {"milestoneId": None}, allow_card_changes=True)
+        assert error.value.error_code == "DECK_UPDATE_UNVERIFIED"
+
+
+@pytest.mark.parametrize(
+    "fields,ack",
+    [({"milestoneId": "bad"}, False), ({"milestoneId": 1}, False), ({"milestoneId": None}, "true")],
+)
+def test_deck_milestone_rejects_invalid_inputs(fields, ack):
+    with patch("codecks_cli.admin.api.dispatch") as dispatch:
+        with pytest.raises(CliError) as error:
+            update_deck(_DECK, fields, allow_card_changes=ack)
+        assert error.value.error_code == "INVALID_INPUT"
+        dispatch.assert_not_called()
+
+
+def test_deck_current_milestone_with_drift_blocks_noop_before_dispatch():
+    with (
+        patch(
+            "codecks_cli.admin.api.query",
+            side_effect=[_deck_state(_MILESTONE, 2, {None: 1, _MILESTONE: 1}), _milestone_state()],
+        ),
+        patch("codecks_cli.admin.api.dispatch") as dispatch,
+    ):
+        with pytest.raises(CliError) as error:
+            update_deck(_DECK, {"milestoneId": _MILESTONE}, allow_card_changes=True)
+        assert error.value.error_code == "INVALID_INPUT"
+        assert "does not move cards" in str(error.value)
+        dispatch.assert_not_called()

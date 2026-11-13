@@ -177,9 +177,14 @@ async def archive_deck(deck: str) -> dict:
     return await asyncio.to_thread(_run_admin, admin.archive_deck, deck)
 
 
-async def update_deck(deck_id: str, fields: dict) -> dict:
-    """Edit title, description, deckType or defaultCard by full deck UUID.
+async def update_deck(deck_id: str, fields: dict, allow_card_changes: bool = False) -> dict:
+    """Edit title, description, deckType, defaultCard or milestoneId by full deck UUID.
 
+    milestoneId: UUID or null. Setting moves all active cards into the milestone;
+    clearing removes it only from cards matching the deck's old milestone.
+    Affected cards require allow_card_changes=true after inspecting the reported count.
+    The target must support the deck's project. Deck and card counts are verified.
+    Reassigning the current milestone cannot move drifted cards; update those cards directly.
     deckType: task, hero, doc, mixed. Switching to hero resets started cards.
     Hero/doc changes fail if Journey steps target this deck. defaultCard replaces
     the entire template; {} clears it. This template write is undocumented by
@@ -187,8 +192,13 @@ async def update_deck(deck_id: str, fields: dict) -> dict:
     values with list_decks(include_metadata=True). Template writes require a
     matching read-back; DECK_UPDATE_UNVERIFIED means inspect state before retrying.
     """
-    result = await asyncio.to_thread(_call, "update_deck", deck_id=deck_id, fields=fields)
-    if result.get("ok") is False and result.get("error_code") != "INVALID_INPUT":
+    result = await asyncio.to_thread(
+        _call, "update_deck", deck_id=deck_id, fields=fields, allow_card_changes=allow_card_changes
+    )
+    if result.get("ok") is False and result.get("error_code") not in (
+        "INVALID_INPUT",
+        "DECK_MILESTONE_REQUIRES_ACK",
+    ):
         # A failed response can follow a completed write; do not reuse stale data.
         _invalidate_cache()
         _persist_cache_to_disk()

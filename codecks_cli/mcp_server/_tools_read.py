@@ -480,7 +480,7 @@ def resolve_card_ids(references: list[str]) -> dict:
 
 
 def list_decks(include_card_counts: bool = False, include_metadata: bool = False) -> dict:
-    """List decks; include_metadata reads fresh descriptions, types and templates.
+    """List decks; include_metadata reads fresh descriptions, types, templates and milestone_id.
 
     Template content and tags carry USER_DATA boundaries; remove those wrappers
     before resubmitting a template to update_deck. Card counts use an extra call.

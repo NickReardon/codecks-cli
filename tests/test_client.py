@@ -36,6 +36,7 @@ def test_list_decks_exposes_fresh_template_metadata(key):
                     "d": {
                         "projectId": "p",
                         "description": "Details",
+                        "milestoneId": None,
                         "deckType": "task",
                         key: template,
                     }
@@ -47,6 +48,7 @@ def test_list_decks_exposes_fresh_template_metadata(key):
         result = _client().list_decks(include_card_counts=False, include_metadata=True)
     decks.assert_called_once_with(include_metadata=True)
     assert result[0]["default_card"] == template
+    assert result[0]["milestone_id"] is None
     assert result[0]["description"] == "Details" and result[0]["deck_type"] == "task"
 
 
@@ -1796,3 +1798,38 @@ class TestAdminWrappers:
             mock_cache.clear.side_effect = RuntimeError("cache gone")
             # Should not raise
             client._warm_after_admin()
+
+
+@pytest.mark.parametrize("key", ["milestoneId", "milestone_id"])
+@pytest.mark.parametrize("value", [None, "00000000-0000-0000-0000-000000000001"])
+def test_deck_metadata_preserves_milestone(key, value):
+    with (
+        patch(
+            "codecks_cli.client.list_decks",
+            return_value={"deck": {"d": {"defaultCard": {}, key: value}}},
+        ),
+        patch("codecks_cli.client.load_project_names", return_value={}),
+    ):
+        assert (
+            _client().list_decks(include_card_counts=False, include_metadata=True)[0][
+                "milestone_id"
+            ]
+            == value
+        )
+
+
+@pytest.mark.parametrize("row", [{"defaultCard": {}}, {"defaultCard": {}, "milestoneId": "bad"}])
+def test_deck_metadata_rejects_missing_or_invalid_milestone(row):
+    with (
+        patch("codecks_cli.client.list_decks", return_value={"deck": {"d": row}}),
+        patch("codecks_cli.client.load_project_names", return_value={}),
+    ):
+        with pytest.raises(CliError) as error:
+            _client().list_decks(include_card_counts=False, include_metadata=True)
+        assert error.value.error_code == "INVALID_QUERY"
+
+
+def test_client_deck_milestone_passes_acknowledgement():
+    with patch("codecks_cli.admin.update_deck", return_value={"ok": True}) as update:
+        _client().update_deck("id", fields={"milestoneId": None}, allow_card_changes=True)
+        update.assert_called_once_with("id", {"milestoneId": None}, allow_card_changes=True)

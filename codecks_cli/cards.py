@@ -225,7 +225,7 @@ def list_decks(*, include_metadata=False):
         return config._cache["decks"]
     fields = ["title", "id", "projectId", "isDeleted"]
     if include_metadata:
-        fields += ["description", "deckType", "defaultCard"]
+        fields += ["description", "deckType", "defaultCard", "milestoneId"]
     q = {"_root": [{"account": [{"decks": fields}]}]}
     result = query(q)
 

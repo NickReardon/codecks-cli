@@ -429,7 +429,7 @@ report = client.standup(days=3, project="My Project")
 
 All methods use keyword-only arguments and return `dict[str, Any]`.
 
-`client.list_projects(include_archived=True)` includes archived projects. Results include `visibility`. `client.update_deck(deck_id, fields={...})` edits title, description, deckType or the experimental defaultCard template. See [deck update semantics](mcp-reference.md#deck-updates-and-archived-projects).
+`client.list_projects(include_archived=True)` includes archived projects. Results include `visibility`. `client.update_deck(deck_id, fields={...})` edits title, description, deckType, milestoneId or the experimental defaultCard template. Milestone edits guard affected cards with `allow_card_changes=True` and verify the deck/card counts. See [deck update semantics](mcp-reference.md#deck-updates-and-archived-projects).
 
 For template editing, call `client.list_decks(include_card_counts=False, include_metadata=True)` to read fresh metadata and preserve existing defaults. Template writes verify the stored replacement before reporting success. `DECK_UPDATE_UNVERIFIED` requires checking state before retrying.
 

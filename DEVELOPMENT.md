@@ -102,7 +102,7 @@ codecks_cli/
   tags.py               <- Tag registry (TagDefinition, TAGS)
   lanes.py              <- Lane registry (LaneDefinition, LANES)
   store.py              <- SQLite storage layer (.pm_store.db)
-  admin.py              <- Admin commands (project/deck/milestone/tag CRUD)
+  admin.py              <- Admin commands, guarded deck/card milestones and verified scope edits
   planning.py           <- File-based planning tools
   gdd.py                <- Google OAuth2, GDD sync
   setup_wizard.py       <- Interactive .env bootstrap and local project alias editing
@@ -199,7 +199,7 @@ py -m pytest --tb=short                # shorter tracebacks
 | `test_repository.py` | CardRepository (indexed card access) |
 | `test_store.py` | CardStore (SQLite storage layer) |
 | `test_exceptions.py` | Exception hierarchy |
-| `test_admin.py` | Admin dispatch ops (deck creation, cache seeding) |
+| `test_admin.py` | Admin dispatch, deck/card milestone guards, verified metadata and project scope |
 
 ### Writing Tests
 

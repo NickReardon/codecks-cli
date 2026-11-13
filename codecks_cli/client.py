@@ -562,7 +562,7 @@ class CodecksClient:
         Args:
             include_card_counts: If True, fetch all cards to count per deck
                 (extra API call). If False, card_count is None.
-            include_metadata: Read fresh description, deck_type and default_card.
+            include_metadata: Read fresh description, deck_type, default_card and milestone_id.
 
         Returns:
             list of deck dicts with id, title, project_name, card_count.
@@ -598,8 +598,23 @@ class CodecksClient:
                         error_code="INVALID_QUERY",
                         retryable=False,
                     )
+                if "milestoneId" not in deck and "milestone_id" not in deck:
+                    raise CliError(
+                        "Deck metadata is missing its milestone", error_code="INVALID_QUERY"
+                    )
+                milestone = _get_field(deck, "milestone_id", "milestoneId")
+                if milestone is not None:
+                    from codecks_cli.admin import _validate_admin_uuid
+
+                    try:
+                        milestone = _validate_admin_uuid(milestone, "milestoneId")
+                    except CliError as error:
+                        raise CliError(
+                            "Invalid deck milestone", error_code="INVALID_QUERY"
+                        ) from error
                 result[-1].update(
                     {
+                        "milestone_id": milestone,
                         "description": deck.get("description", ""),
                         "deck_type": _get_field(deck, "deck_type", "deckType"),
                         "default_card": template,
@@ -1502,11 +1517,13 @@ class CodecksClient:
             self._warm_after_admin()
         return result
 
-    def update_deck(self, deck_id: str, *, fields: dict[str, Any]) -> dict[str, Any]:
+    def update_deck(
+        self, deck_id: str, *, fields: dict[str, Any], allow_card_changes: bool = False
+    ) -> dict[str, Any]:
         """Update a deck by UUID. defaultCard replaces the entire template."""
         from codecks_cli import admin
 
-        return admin.update_deck(deck_id, fields)
+        return admin.update_deck(deck_id, fields, allow_card_changes=allow_card_changes)
 
     def update_milestone(
         self, milestone_id: str, *, fields: dict[str, Any], allow_project_removal: bool = False

@@ -321,17 +321,65 @@ def create_project(name: str) -> dict[str, Any]:
         }
 
 
-def update_deck(deck_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+def _read_deck_milestone(deck_id, milestones, extra_fields=()):
+    keys = {
+        mid: "count:cards(" + json.dumps({"visibility": "default", "milestoneId": mid}) + ")"
+        for mid in milestones
+    }
+    total_key = 'count:cards({"visibility": "default"})'
+    data = api.query(
+        {
+            f"deck({json.dumps([deck_id])})": [
+                "milestoneId",
+                "projectId",
+                "isDeleted",
+                total_key,
+                *keys.values(),
+                *extra_fields,
+            ]
+        }
+    )
+    try:
+        row = data["deck"][deck_id]
+        if not isinstance(row, dict) or _get_field(row, "is_deleted", "isDeleted") is not False:
+            raise ValueError("Deck is missing or deleted")
+        project = _validate_admin_uuid(_get_field(row, "project_id", "projectId"), "projectId")
+        if "milestoneId" not in row and "milestone_id" not in row:
+            raise ValueError("Missing deck milestone")
+        milestone = _get_field(row, "milestone_id", "milestoneId")
+        if milestone is not None:
+            milestone = _validate_admin_uuid(milestone, "milestoneId")
+        total = row[total_key]
+        counts = {mid: row[key] for mid, key in keys.items()}
+        if (
+            type(total) is not int
+            or total < 0
+            or any(type(count) is not int or not 0 <= count <= total for count in counts.values())
+            or sum(counts.values()) > total
+        ):
+            raise ValueError("Invalid card counts")
+    except (KeyError, TypeError, ValueError, CliError) as error:
+        raise CliError(
+            "Deck milestone metadata or card counts are incomplete",
+            error_code="INVALID_QUERY",
+            retryable=False,
+        ) from error
+    return row, project, milestone, total, counts
+
+
+def update_deck(
+    deck_id: str, fields: dict[str, Any], *, allow_card_changes: bool = False
+) -> dict[str, Any]:
     """Update deck metadata. defaultCard is an experimental whole-template replacement."""
 
     def invalid(message: str) -> None:
         raise CliError(message, error_code="INVALID_INPUT", retryable=False)
 
     deck_id = _validate_admin_uuid(deck_id, "deck_id")
-    allowed = {"title", "description", "deckType", "defaultCard"}
+    allowed = {"title", "description", "deckType", "defaultCard", "milestoneId"}
     if not isinstance(fields, dict) or not fields or fields.keys() - allowed:
         invalid(
-            "fields must be a nonempty object containing title, description, deckType or defaultCard"
+            "fields must be a nonempty object containing title, description, deckType, defaultCard or milestoneId"
         )
     for key, maximum in (("title", 500), ("description", 10000)):
         if key in fields:
@@ -377,9 +425,86 @@ def update_deck(deck_id: str, fields: dict[str, Any]) -> dict[str, Any]:
                 invalid(
                     "defaultCard.masterTags must contain at most 100 nonempty strings of at most 500 characters"
                 )
+    if type(allow_card_changes) is not bool:
+        invalid("allow_card_changes must be a boolean")
+    affected = 0
+    if "milestoneId" in fields:
+        fields = dict(fields)
+        target = fields["milestoneId"]
+        if target is not None:
+            target = fields["milestoneId"] = _validate_admin_uuid(target, "milestoneId")
+        counted = {None, target}
+        _, project, old, total, before = _read_deck_milestone(deck_id, counted)
+        if target is not None:
+            from codecks_cli.cards import _milestone_scope
+
+            data = api.query(
+                {
+                    f"milestone({json.dumps([target])})": [
+                        "isDeleted",
+                        "isGlobal",
+                        {"milestoneProjects": ["projectId"]},
+                    ]
+                }
+            )
+            row = data.get("milestone", {}).get(target, {})
+            if _get_field(row, "is_deleted", "isDeleted") is not False:
+                invalid("Milestone must exist and be active")
+            scope = _milestone_scope(data, row)
+            if not scope["is_global"] and project not in scope["project_ids"]:
+                invalid("Milestone does not support the deck's project")
+            affected = total - before[target]
+            if old == target and affected:
+                invalid(
+                    "Deck already uses this milestone; assigning it again does not move cards. "
+                    "Update the differing card milestones directly."
+                )
+        elif old is not None:
+            counted.add(old)
+            _, _, current, total, before = _read_deck_milestone(deck_id, counted)
+            if current != old:
+                invalid("Deck milestone changed during preflight; read it again")
+            affected = before[old]
+        if affected and not allow_card_changes:
+            raise CliError(
+                f"This changes the milestone of {affected} active card(s). "
+                f"Deck milestone: {old} -> {target}. "
+                "Set allow_card_changes=true to acknowledge.",
+                error_code="DECK_MILESTONE_REQUIRES_ACK",
+                retryable=False,
+            )
     try:
         api.dispatch("decks/update", {"id": deck_id.lower(), **fields})
-        if "defaultCard" in fields:
+        if "milestoneId" in fields:
+            try:
+                row, _, actual, after_total, after = _read_deck_milestone(
+                    deck_id, counted, [key for key in fields if key != "milestoneId"]
+                )
+                verified = actual == target and after_total == total
+                if target is not None:
+                    verified = verified and after[target] == total
+                elif old is not None:
+                    verified = (
+                        verified and after[old] == 0 and after[None] == before[None] + affected
+                    )
+                else:
+                    verified = verified and after[None] == before[None]
+                aliases = {"defaultCard": "default_card", "deckType": "deck_type"}
+                verified = verified and all(
+                    _get_field(row, aliases.get(key, key), key) == value
+                    for key, value in fields.items()
+                    if key != "milestoneId"
+                )
+                if not verified:
+                    raise CliError("Deck or card milestone read-back does not match")
+            except (CliError, AttributeError, TypeError) as error:
+                raise CliError(
+                    "Deck update was submitted, but the deck/card milestones could not be verified. "
+                    "Read the deck and cards before retrying.",
+                    error_code="DECK_UPDATE_UNVERIFIED",
+                    retryable=False,
+                ) from error
+        elif "defaultCard" in fields:
             try:
                 data = api.query({f"deck({json.dumps([deck_id.lower()])})": ["defaultCard"]})
                 deck = data.get("deck", {}).get(deck_id.lower(), {})
@@ -395,7 +520,15 @@ def update_deck(deck_id: str, fields: dict[str, Any]) -> dict[str, Any]:
                 ) from error
     finally:
         config._cache.pop("decks", None)
-    return {"ok": True, "deck_id": deck_id.lower(), "updated_fields": list(fields), "source": "api"}
+    result = {
+        "ok": True,
+        "deck_id": deck_id.lower(),
+        "updated_fields": list(fields),
+        "source": "api",
+    }
+    if "milestoneId" in fields:
+        result["affected_card_count"] = affected
+    return result
 
 
 def _prepare_milestone_scope(milestone_id, fields, allow_project_removal):

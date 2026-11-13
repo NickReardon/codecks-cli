@@ -280,15 +280,23 @@ Built-in safety checks that prevent common agent mistakes:
 
 `list_projects(include_archived=True)` includes archived projects and returns `visibility`, API names, and undeleted deck counts. The default includes active projects only, including projects with no decks.
 
-`update_deck(deck_id, fields)` requires a full UUID. Supported fields: `title`, `description`, `deckType` (`task`, `hero`, `doc`, `mixed`), and `defaultCard`. Omitted fields remain unchanged. Switching to hero resets started cards to not_started. Hero/doc changes fail while Journey steps target the deck.
+`update_deck(deck_id, fields, allow_card_changes=False)` requires a full UUID. Supported fields: `title`, `description`, `deckType` (`task`, `hero`, `doc`, `mixed`), `defaultCard`, and nullable `milestoneId`. Omitted fields remain unchanged. Switching to hero resets started cards to not_started. Hero/doc changes fail while Journey steps target the deck.
 
 `defaultCard` replaces the entire template; `{}` clears it. Supported template fields: `content`, `assigneeId` (UUID or null), `priority` (a/b/c or null), `effort` (nonnegative int32 or null), and `masterTags` (tag names). Template writes are experimental: verified against the live API, but undocumented by Codecks. API card creation does not apply template defaults.
 
 ### Safe template editing
 
-Read `list_decks(include_metadata=True)` before changing a template. This bypasses the snapshot and returns `description`, `deck_type`, and `default_card`. MCP bounds template content and tag names with `[USER_DATA]` markers; remove the boundary markers before sending those values back. The Python client returns the original values. Metadata is opt-in so normal deck reads stay small.
+Read `list_decks(include_metadata=True)` before changing a template. This bypasses the snapshot and returns `description`, `deck_type`, `default_card`, and nullable `milestone_id`. MCP bounds template content and tag names with `[USER_DATA]` markers; remove the boundary markers before sending those values back. The Python client returns the original values. Metadata is opt-in so normal deck reads stay small.
 
-Template writes perform a direct API read-back before reporting success. A missing template, mismatched replacement, or failed read returns `DECK_UPDATE_UNVERIFIED` with `retryable=false`. Other fields in the same update may already have changed. Inspect current metadata before retrying. Non-template edits do not require this extra read.
+Template writes perform a direct API read-back before reporting success. A missing template, mismatched replacement, or failed read returns `DECK_UPDATE_UNVERIFIED` with `retryable=false`. Other fields in the same update may already have changed. Inspect current metadata before retrying. Edits without a template or milestone do not require this extra read.
+
+### Deck milestone assignment
+
+Set `milestoneId` to a full UUID to assign the deck and all cards whose visibility is `default`, including done cards. Archived and deleted cards are excluded. Set it to `null` to clear the deck milestone and clear only active cards matching the deck's old milestone. Other card milestones remain unchanged. The live API does not move cards when assigning the current deck milestone again. If cards have drifted, the tool rejects that no-op before dispatch; update their milestones directly.
+
+The target must be active and either global or linked to the deck's project. Preflight reads fresh deck metadata and exact filtered card counts. When cards would change, `DECK_MILESTONE_REQUIRES_ACK` reports their count and blocks dispatch. Inspect that result before retrying with `allow_card_changes=true`. A write affecting zero cards needs no acknowledgement.
+
+Read-back verifies the deck milestone, active card totals, and matching milestone counts. Mixed updates also verify the other submitted deck fields. Success includes `affected_card_count`. Missing counts, a mismatch, or a failed verification read produces non-retryable `DECK_UPDATE_UNVERIFIED` after dispatch. Inspect the deck and cards before retrying. Counts verify the API's bulk effect without fetching every card. This does not provide a transaction against other processes.
 
 ## Milestone metadata editing
 

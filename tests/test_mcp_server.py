@@ -107,7 +107,9 @@ def test_update_deck_invalidates_and_preserves_error_contract():
         factory.return_value = client
         with patch("codecks_cli.mcp_server._core._write_through_cache") as invalidate:
             assert asyncio.run(mcp_mod.update_deck(_C1, {"title": "New"}))["ok"]
-            client.update_deck.assert_called_once_with(deck_id=_C1, fields={"title": "New"})
+            client.update_deck.assert_called_once_with(
+                deck_id=_C1, fields={"title": "New"}, allow_card_changes=False
+            )
             invalidate.assert_called_once()
         client.update_deck.side_effect = CliError(
             "denied", error_code="PERMISSION_DENIED", retryable=False
@@ -4123,3 +4125,19 @@ def test_admin_project_ambiguity_preserves_error_and_does_not_invalidate():
     invalidate.assert_not_called()
     assert result["error_code"] == "INVALID_INPUT"
     assert result["retryable"] is False
+
+
+def test_deck_milestone_ack_guard_preserves_cached_cards():
+    with (
+        patch(
+            "codecks_cli.mcp_server._tools_admin._call",
+            return_value={"ok": False, "error_code": "DECK_MILESTONE_REQUIRES_ACK"},
+        ) as call,
+        patch("codecks_cli.mcp_server._tools_admin._invalidate_cache") as invalidate,
+    ):
+        result = asyncio.run(mcp_mod.update_deck(_C1, {"milestoneId": None}))
+        assert result["error_code"] == "DECK_MILESTONE_REQUIRES_ACK"
+        invalidate.assert_not_called()
+        call.assert_called_once_with(
+            "update_deck", deck_id=_C1, fields={"milestoneId": None}, allow_card_changes=False
+        )
