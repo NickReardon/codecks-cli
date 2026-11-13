@@ -36,7 +36,7 @@ from codecks_cli.mcp_server import (
 mcp = MCPServer(
     "codecks",
     instructions=(
-        "Codecks project management tools. "
+        "Codecks project management tools (62 tools). "
         "All card IDs must be full 36-char UUIDs. "
         "Use resolve_card_ids() to translate #card numbers and $Codecks references first. "
         "Doc cards: no status/priority/effort. "

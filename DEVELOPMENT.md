@@ -40,6 +40,13 @@ cp .env.example .env         # then fill in your tokens
 
 Run `py codecks_api.py setup` for an interactive setup wizard that handles all of this.
 
+Project names are read from current `account.projects` metadata. `cards.py` owns
+shared ID/name/alias resolution, including ambiguity checks used by filters,
+deck lookup and admin writes. `setup_wizard.py` edits explicit local aliases in
+`CODECKS_PROJECT_ALIASES` (a JSON object keyed by project ID). Legacy
+`CODECKS_PROJECTS` mappings only fill missing API names. Project-filtered MCP
+reads use the live resolver rather than cached display-name comparisons.
+
 ## Running
 
 ```bash
@@ -80,9 +87,9 @@ codecks_cli/
   client.py             <- CodecksClient: 43 public methods
   attachments.py        <- File validation and S3 multipart upload helpers
   scaffolding.py        <- scaffold_feature(), split_features()
-  cards.py              <- Card CRUD, hand, conversations
+  cards.py              <- Card CRUD, hand, conversations, current project names and alias resolution
   card_refs.py          <- Exact #number / $reference to UUID lookup
-  journeys.py           <- Experimental native Journey operations (internal API)
+  journeys.py           <- Experimental native Journey operations via shared API dispatch
   api.py                <- HTTP layer (retries, timeouts, tokens)
   config.py             <- .env loading, constants, VERSION
   exceptions.py         <- CliError, SetupError, HTTPError
@@ -98,7 +105,7 @@ codecks_cli/
   admin.py              <- Admin commands (project/deck/milestone/tag CRUD)
   planning.py           <- File-based planning tools
   gdd.py                <- Google OAuth2, GDD sync
-  setup_wizard.py       <- Interactive .env bootstrap
+  setup_wizard.py       <- Interactive .env bootstrap and local project alias editing
   formatters/           <- JSON/table/CSV output (7 sub-modules)
     __init__.py          re-exports all 24 names
     _table.py            _table(), _trunc(), _sanitize_str()
@@ -174,7 +181,7 @@ py -m pytest --tb=short                # shorter tracebacks
 | `test_commands.py` | Command handlers (cmd_*) |
 | `test_client.py` | CodecksClient methods |
 | `test_card_refs.py` | Exact card references and native short-code encoding |
-| `test_journeys.py` | Native Journey payloads, validation, errors, and MCP safety |
+| `test_journeys.py` | Native Journey payloads, strict dispatch validation, errors, and MCP safety |
 | `test_cards.py` | Card CRUD operations |
 | `test_api.py` | HTTP layer, retries, tokens |
 | `test_config.py` | Configuration loading |

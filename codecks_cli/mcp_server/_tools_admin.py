@@ -24,14 +24,8 @@ def _run_admin(func, *args, **kwargs):
     config._cache.clear()
     try:
         result = func(*args, **kwargs)
-    except CliError as error:
-        return _finalize_tool_result(
-            _contract_error(
-                str(error),
-                retryable=error.retryable,
-                error_code=error.error_code or "CLI_ERROR",
-            )
-        )
+    except CliError as exc:
+        return _finalize_tool_result(_contract_error(str(exc), "error", exc=exc))
     if result.get("ok"):
         _invalidate_cache()
         _persist_cache_to_disk()

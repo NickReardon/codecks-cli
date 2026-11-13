@@ -2,6 +2,13 @@
 
 The MCP (Model Context Protocol) server exposes 62 tools for AI agents, enabling full Codecks management from within an AI conversation.
 
+Project filters accept exact project IDs, current API names and explicit local
+aliases. Name collisions return non-retryable `INVALID_INPUT` with candidate IDs.
+Project-filtered card lists and overviews use live lookup rather than matching
+cached display names. Unfiltered reads retain their existing snapshot cache.
+Set or clear aliases with `codecks-cli setup` (option 5), then restart a running
+MCP server to reload local configuration.
+
 ## Setup
 
 ### Install and Run
@@ -77,14 +84,18 @@ Codecks' documented API stability contract. Scoped API tokens may reject them
 even with Producer permission. Such denials propagate through the normal error
 contract; there is no legacy browser-auth fallback. Reads return only active
 steps. Beginning-of-zone moves anchor before the first unmoved active step.
+Writes use the shared dispatch helper, including object-response validation
+and strict-mode acknowledgement checks (`actionId`, `ok`, or `payload`).
 Starting a Journey sends explicit active step IDs and skips steps already
 represented by child cards. Starts on the same parent are serialized within one
 process and the resulting children are verified after creation. An uncertain
 write returns non-retryable `JOURNEY_OUTCOME_UNKNOWN`; further starts on that
 parent only submit after all previously submitted steps are visible. Reconcile
 the parent's children before retrying. This protection is process-local and is
-lost on restart. Codecks' apply endpoint creates duplicates on request replay,
-including when the same request ID and idempotency key are reused.
+lost on restart. Concurrent processes or stale child reads after restart can
+create duplicate tasks. No supported server-side idempotency contract has been
+confirmed for this action. Do not assume that supplying a request ID or a guessed
+idempotency key prevents duplicates.
 
 ## Prompt Surface
 

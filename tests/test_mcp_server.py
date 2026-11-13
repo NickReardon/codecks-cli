@@ -46,14 +46,17 @@ def test_create_milestone_unknown_project_returns_lookup_error_without_dispatch(
     with (
         patch("codecks_cli.admin._get_account_id", return_value=_C1),
         patch("codecks_cli.admin._get_user_id", return_value=_C2),
-        patch("codecks_cli.cards.list_projects", return_value={_C1: {"name": "Current Project"}}),
+        patch(
+            "codecks_cli.cards._load_project_records",
+            return_value={_C1: {"id": _C1, "name": "Current Project"}},
+        ),
         patch("codecks_cli.admin.api.dispatch") as dispatch,
     ):
         result = asyncio.run(_tools_admin.create_milestone("Test", project="Old Project"))
     assert result["ok"] is False
-    assert result["error_code"] == "CLI_ERROR"
+    assert result["error_code"] == "INVALID_INPUT"
     assert result["retryable"] is False
-    assert "Old Project" in result["error"] and "Current Project" in result["error"]
+    assert "Old Project" in result["error"]
     dispatch.assert_not_called()
 
 
@@ -4017,7 +4020,46 @@ def _team_client():
     return client
 
 
+_TEAM_PROJECTS = {
+    "p-tea": {"id": "p-tea", "name": "Tea Shop"},
+    "p-biz": {"id": "p-biz", "name": "Business"},
+}
+
+
 class TestTeamProjectFilters:
+    @pytest.fixture(autouse=True)
+    def _project_records(self):
+        with patch("codecks_cli.cards._load_project_records", return_value=dict(_TEAM_PROJECTS)):
+            yield
+
+    def test_project_filter_accepts_project_id(self):
+        _core._client = _team_client()
+        _core._invalidate_cache()
+        result = mcp_mod.partition_by_owner(project="p-biz")
+        assert set(result["owners"]) == {"Bob"}
+
+    def test_project_filter_accepts_alias(self):
+        from codecks_cli import config
+
+        config.env["CODECKS_PROJECT_ALIASES"] = '{"p-biz": "Office"}'
+        decks = [{**_TEAM_DECKS[0]}, {**_TEAM_DECKS[1], "project_name": "Office"}]
+        _core._client = _team_client()
+        _core._client.list_decks.return_value = decks
+        _core._invalidate_cache()
+        # The Codecks name resolves to the alias that cards are labeled with.
+        result = mcp_mod.partition_by_owner(project="Business")
+        assert set(result["owners"]) == {"Bob"}
+
+    def test_ambiguous_project_is_invalid_input(self):
+        records = {**_TEAM_PROJECTS, "p-dup": {"id": "p-dup", "name": "Tea Shop"}}
+        _core._client = _team_client()
+        _core._invalidate_cache()
+        with patch("codecks_cli.cards._load_project_records", return_value=records):
+            result = mcp_mod.partition_by_lane(project="Tea Shop")
+        assert result["ok"] is False
+        assert result["error_code"] == "INVALID_INPUT"
+        assert "p-dup" in result["error"]
+
     def test_partition_by_lane_project_filter(self):
         _core._client = _team_client()
         _core._invalidate_cache()
@@ -4046,3 +4088,38 @@ class TestTeamProjectFilters:
         result = mcp_mod.team_dashboard(project="Tea Shop")
         assert result["ok"] is True
         assert result["unclaimed_in_progress_count"] == 1
+
+
+@pytest.mark.parametrize("tool_name", ["list_cards", "quick_overview"])
+def test_project_filtered_reads_bypass_display_name_cache(tool_name):
+    from codecks_cli.mcp_server import _tools_read
+
+    error = {
+        "ok": False,
+        "error_code": "INVALID_INPUT",
+        "retryable": False,
+        "error": "Project is ambiguous: p1, p2",
+    }
+    with (
+        patch.object(_tools_read, "_try_cache") as cache,
+        patch.object(_tools_read, "_call", return_value=error) as call,
+    ):
+        result = getattr(_tools_read, tool_name)(project="Duplicate")
+    cache.assert_not_called()
+    assert call.call_args.kwargs["project"] == "Duplicate"
+    assert result["error_code"] == "INVALID_INPUT"
+    assert result["retryable"] is False
+
+
+def test_admin_project_ambiguity_preserves_error_and_does_not_invalidate():
+    from codecks_cli import CliError
+    from codecks_cli.mcp_server import _tools_admin
+
+    def fail():
+        raise CliError("Project is ambiguous: p1, p2", error_code="INVALID_INPUT", retryable=False)
+
+    with patch.object(_tools_admin, "_invalidate_cache") as invalidate:
+        result = _tools_admin._run_admin(fail)
+    invalidate.assert_not_called()
+    assert result["error_code"] == "INVALID_INPUT"
+    assert result["retryable"] is False

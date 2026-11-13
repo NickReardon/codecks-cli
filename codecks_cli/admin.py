@@ -78,17 +78,12 @@ def _resolve_project_id(project_name: str | None = None) -> str:
     if project_name is None:
         return _get_primary_project_id()
 
-    from codecks_cli.cards import list_projects
+    from codecks_cli.cards import resolve_project_id
 
-    projects = list_projects()
-    for pid, info in projects.items():
-        if info.get("name", "").lower() == project_name.lower():
-            return str(pid)
-
-    raise CliError(
-        f"[ERROR] Project '{project_name}' not found. "
-        f"Available: {[info.get('name') for info in projects.values()]}"
-    )
+    pid = resolve_project_id(project_name)
+    if pid is None:
+        raise CliError(f"[ERROR] Project '{project_name}' not found.", error_code="INVALID_INPUT")
+    return str(pid)
 
 
 def _resolve_deck_id(deck_name: str, project: str | None = None) -> str:

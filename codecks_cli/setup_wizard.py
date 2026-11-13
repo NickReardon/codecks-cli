@@ -3,6 +3,8 @@ Interactive setup wizard for codecks-cli.
 Guides users through configuration of tokens, projects, and milestones.
 """
 
+import json
+
 from codecks_cli import config
 from codecks_cli._utils import _get_field
 from codecks_cli.api import (
@@ -16,10 +18,12 @@ from codecks_cli.api import (
 from codecks_cli.cards import (
     _load_env_mapping,
     _load_milestone_records,
+    _load_project_aliases,
     _load_project_records,
     list_decks,
     load_project_names,
 )
+from codecks_cli.exceptions import CliError
 
 # ---------------------------------------------------------------------------
 # Setup discovery helpers
@@ -27,30 +31,39 @@ from codecks_cli.cards import (
 
 
 def _setup_discover_projects():
-    """Show API project names; ask only when a name is missing."""
+    """Show current names and optionally edit local aliases by stable project ID."""
     print("Discovering projects...")
     projects = _try_call(_load_project_records)
     if not projects:
-        print("  No projects found.")
+        print("  No projects found. Existing local names were preserved.")
         return
-    print(f"  Found {len(projects)} project(s):")
-    manual_names = _load_env_mapping("CODECKS_PROJECTS")
-    changed = False
+    try:
+        aliases = _load_project_aliases()
+    except CliError as e:
+        # This screen is how a broken value gets fixed, so don't block on it.
+        print(f"  Warning: {e}. Saving aliases here will replace the stored value.")
+        aliases = {}
+    legacy = _load_env_mapping("CODECKS_PROJECTS")
     for pid, project in projects.items():
-        name = project.get("name")
-        if not name:
-            prior = manual_names.get(pid, "")
-            entered = input(f"    Project name for {pid} [{prior}]: ").strip()
-            name = entered or prior or pid
-            if entered:
-                manual_names[pid] = entered
-                changed = True
-        print(f"    {name}")
-    if changed:
-        mapping = ",".join(f"{pid}={name}" for pid, name in manual_names.items())
-        config.save_env_value("CODECKS_PROJECTS", mapping)
-        config.env["CODECKS_PROJECTS"] = mapping
-        config._cache.pop("project_names", None)
+        name = project.get("name") or legacy.get(pid) or pid
+        label = f"{aliases[pid]} (Codecks: {name})" if pid in aliases else name
+        print(f"  {label} [{pid}]")
+    if input("Set, change or reset local project aliases? [y/N]: ").strip().lower() != "y":
+        return
+    print("Aliases only affect this installation. Enter keeps an alias; '-' clears it.")
+    updated = dict(aliases)
+    for pid, project in projects.items():
+        name = project.get("name") or legacy.get(pid) or pid
+        entered = input(f"  {name} [{pid}] - local alias [{aliases.get(pid, '')}]: ").strip()
+        if entered == "-":
+            updated.pop(pid, None)
+        elif entered:
+            updated[pid] = entered
+    if updated != aliases:
+        value = json.dumps(updated, ensure_ascii=True)
+        config.save_env_value("CODECKS_PROJECT_ALIASES", value)
+        config.env["CODECKS_PROJECT_ALIASES"] = value
+        print("  Saved local project aliases.")
     print()
 
 
@@ -161,6 +174,8 @@ def _setup_gdd_optional():
 def _deck_choices():
     """Return [(label, deck_id)] sorted by label; label is "Deck (Project)"."""
     decks_result = _try_call(list_decks) or {}
+    if not decks_result.get("deck"):
+        return []
     projects = load_project_names() or {}
     choices = []
     for key, deck in (decks_result.get("deck") or {}).items():
@@ -218,7 +233,7 @@ def _setup_done():
     tok = final_env.get("CODECKS_TOKEN", "")
     print(f"  API token:     {_mask_token(tok) if tok else '(not set)'}")
     print(f"  Default deck:  {'set' if final_env.get('CODECKS_DEFAULT_DECK') else '(not set)'}")
-    print("  Projects:      read from Codecks API")
+    print("  Projects:      current Codecks names with optional local aliases")
     ms = final_env.get("CODECKS_MILESTONES", "")
     ms_count = len([m for m in ms.split(",") if "=" in m]) if ms else 0
     print(f"  Milestones:    {ms_count} mapped")
@@ -276,6 +291,7 @@ def cmd_setup():
                 "  2. Update API token\n"
                 "  3. Run full setup from scratch\n"
                 "  4. Change default deck (where new cards go)\n"
+                "  5. Change or reset local project aliases\n"
                 "  Choice [1]: "
             ).strip()
             if choice == "" or choice == "1":
@@ -295,6 +311,10 @@ def cmd_setup():
             elif choice == "4":
                 print()
                 _setup_default_deck()
+                _setup_done()
+                return
+            elif choice == "5":
+                _setup_discover_projects()
                 _setup_done()
                 return
             elif choice == "3":
